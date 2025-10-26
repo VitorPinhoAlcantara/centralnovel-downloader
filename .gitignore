@@ -1,0 +1,38 @@
+# CSVs grandes com links
+links_capitulos.csv
+
+# Pastas de downloads
+lord-of-mysteries-*/
+*.pdf
+*.cbz
+
+# Arquivos temporários Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Ambientes virtuais
+venv/
+env/
+ENV/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Poppler (se incluído localmente)
+poppler/
