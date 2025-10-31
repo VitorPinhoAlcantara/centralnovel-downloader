@@ -160,7 +160,7 @@ def carregar_links_csv(arquivo='links_capitulos.csv'):
 
 
 def criar_pasta_volume(volume):
-    pasta = f"lord-of-mysteries-{volume.zfill(2)}"
+    pasta = f"Lord Of The Mysteries Vol {volume.zfill(2)}"
     if not os.path.exists(pasta):
         os.makedirs(pasta)
         print(f"📁 Pasta criada: {pasta}")
@@ -269,6 +269,52 @@ def download_intervalo(inicio, fim, dados=None):
     print(f"{'='*50}")
 
 
+def download_volume(numero_volume, dados=None):
+    if dados is None:
+        dados = carregar_links_csv()
+    if not dados:
+        print("❌ Execute a opção 1 primeiro")
+        return
+
+    capitulos_do_volume = [item for item in dados if item['volume'] == str(numero_volume)]
+    if not capitulos_do_volume:
+        print(f"❌ Volume {numero_volume} não encontrado")
+        volumes_disponiveis = sorted(set(item['volume'] for item in dados))
+        print(f"📚 Volumes disponíveis: {', '.join(volumes_disponiveis)}")
+        return
+
+    print(f"\n📥 Baixando Volume {numero_volume}...")
+    print(f"   Total de capítulos: {len(capitulos_do_volume)}")
+    print(f"   Capítulos: {capitulos_do_volume[0]['capitulo']} até {capitulos_do_volume[-1]['capitulo']}")
+    print(f"⏱️  Tempo estimado: ~{len(capitulos_do_volume) * DELAY_ENTRE_DOWNLOADS / 60:.1f} min")
+
+    confirmacao = input("\n⚠️  Continuar? (s/n): ")
+    if confirmacao.lower() != 's':
+        print("❌ Cancelado")
+        return
+
+    sucesso = falhas = 0
+    for i, cap in enumerate(capitulos_do_volume, 1):
+        print(f"\n[{i}/{len(capitulos_do_volume)}] Vol. {cap['volume']} Cap. {cap['capitulo']}: {cap['titulo']}")
+        pasta = criar_pasta_volume(cap['volume'])
+        titulo_limpo = limpar_nome_arquivo(cap['titulo'])
+        nome_arquivo = f"Capitulo_{cap['capitulo'].zfill(3)}_{titulo_limpo}.pdf"
+        caminho_completo = os.path.join(pasta, nome_arquivo)
+
+        if baixar_pdf(cap.get('post_id'), cap['url'], caminho_completo):
+            sucesso += 1
+        else:
+            falhas += 1
+
+        if i < len(capitulos_do_volume):
+            time.sleep(DELAY_ENTRE_DOWNLOADS)
+
+    print(f"\n{'='*50}")
+    print(f"✅ Sucessos: {sucesso}")
+    print(f"❌ Falhas: {falhas}")
+    print(f"{'='*50}")
+
+
 def download_todos(dados=None):
     if dados is None:
         dados = carregar_links_csv()
@@ -318,7 +364,8 @@ def menu_principal():
         print("2. Baixar todos")
         print("3. Baixar capítulo específico")
         print("4. Baixar intervalo")
-        print("5. Sair")
+        print("5. Baixar volume")
+        print("6. Sair")
         print("-" * 40)
 
         escolha = input("\nOpção: ").strip()
@@ -353,6 +400,13 @@ def menu_principal():
                 print("❌ Formato inválido")
 
         elif escolha == '5':
+            try:
+                numero_volume = int(input("\nVolume: ").strip())
+                download_volume(numero_volume)
+            except ValueError:
+                print("❌ Número inválido")
+
+        elif escolha == '6':
             print("\n👋 Encerrando...")
             break
 
