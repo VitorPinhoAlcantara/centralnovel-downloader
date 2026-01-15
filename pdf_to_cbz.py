@@ -9,29 +9,22 @@ import shutil
 from pathlib import Path
 
 try:
-    from pdf2image import convert_from_path
+    import fitz  # PyMuPDF
     from PIL import Image
 except ImportError:
     print("ERRO: Bibliotecas necessarias nao encontradas!")
-    print("\nInstale: pip install pdf2image Pillow")
+    print("\nInstale: pip install pymupdf Pillow")
     sys.exit(1)
 
 QUALIDADE_JPG = 95
 DPI = 150
 
-POPPLER_PATH = None
-if sys.platform == 'win32':
-    possible_paths = [
-        r"C:\poppler\poppler-24.08.0\Library\bin",
-        r"C:\poppler\Library\bin",
-        r"C:\Program Files\poppler\bin",
-        r"C:\Program Files (x86)\poppler\bin",
-    ]
-    for path in possible_paths:
-        if os.path.exists(os.path.join(path, "pdfinfo.exe")):
-            POPPLER_PATH = path
-            print(f"[INFO] Poppler: {POPPLER_PATH}")
-            break
+def _render_page_to_image(page, dpi):
+    zoom = dpi / 72
+    matrix = fitz.Matrix(zoom, zoom)
+    pix = page.get_pixmap(matrix=matrix)
+    mode = "RGBA" if pix.alpha else "RGB"
+    return Image.frombytes(mode, [pix.width, pix.height], pix.samples)
 
 
 def converter_pdf_para_imagens(pdf_path, output_folder, verbose=True):
@@ -42,26 +35,24 @@ def converter_pdf_para_imagens(pdf_path, output_folder, verbose=True):
         if verbose:
             print(f"    Renderizando (DPI: {DPI})...")
 
-        if POPPLER_PATH:
-            images = convert_from_path(pdf_path, dpi=DPI, fmt='jpg', thread_count=4, poppler_path=POPPLER_PATH)
-        else:
-            images = convert_from_path(pdf_path, dpi=DPI, fmt='jpg', thread_count=4)
+        with fitz.open(pdf_path) as doc:
+            total_pages = doc.page_count
+            if verbose:
+                print(f"    Total: {total_pages} paginas")
 
-        if verbose:
-            print(f"    Total: {len(images)} páginas")
+            image_paths = []
+            digits = len(str(total_pages))
 
-        image_paths = []
-        total_pages = len(images)
-        digits = len(str(total_pages))
+            for i in range(total_pages):
+                page = doc.load_page(i)
+                image = _render_page_to_image(page, DPI)
+                image_name = f"{str(i + 1).zfill(digits)}.jpg"
+                image_path = os.path.join(output_folder, image_name)
+                image.save(image_path, 'JPEG', quality=QUALIDADE_JPG, optimize=True)
+                image_paths.append(image_path)
 
-        for i, image in enumerate(images, 1):
-            image_name = f"{str(i).zfill(digits)}.jpg"
-            image_path = os.path.join(output_folder, image_name)
-            image.save(image_path, 'JPEG', quality=QUALIDADE_JPG, optimize=True)
-            image_paths.append(image_path)
-
-            if verbose and i % 5 == 0:
-                print(f"    Processando: {i}/{total_pages}...")
+                if verbose and (i + 1) % 5 == 0:
+                    print(f"    Processando: {i + 1}/{total_pages}...")
 
         if verbose:
             print(f"    [OK] {len(image_paths)} imagens")
