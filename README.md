@@ -13,6 +13,8 @@ Use o arquivo unico `main.py`:
 python main.py
 ```
 
+A navegacao agora e interativa no terminal (setas/espaco/enter), com limpeza de tela ao trocar de menu.
+
 Menu principal:
 1. Download de novel
 2. Conversao PDF -> CBZ

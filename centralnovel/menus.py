@@ -1,4 +1,8 @@
-"""CLI menus for downloader and converter."""
+"""Interactive TUI menus for downloader and converter."""
+
+import os
+
+from InquirerPy import inquirer
 
 from .config import DPI, QUALIDADE_JPG
 from .converter import converter_pdf_para_cbz, processar_pasta
@@ -13,224 +17,258 @@ from .scraper import (
 from .selection import parse_numero_lista_ou_intervalo
 
 
-def menu_download():
-    print("=" * 60)
-    print("DOWNLOAD DE NOVEL")
-    print("=" * 60)
-
+def menu_principal():
     while True:
+        _clear_screen()
+        escolha = inquirer.select(
+            message="CENTRALNOVEL - MAIN",
+            choices=[
+                {"name": "Download de novel", "value": "download"},
+                {"name": "Conversao PDF -> CBZ", "value": "conversao"},
+                {"name": "Sair", "value": "sair"},
+            ],
+            cycle=True,
+        ).execute()
+
+        if escolha == "download":
+            menu_download()
+        elif escolha == "conversao":
+            menu_conversao()
+        else:
+            _clear_screen()
+            print("Encerrando...")
+            return
+
+
+def menu_download():
+    while True:
+        _clear_screen()
         novel = _selecionar_novel()
         if not novel:
             return
 
+        _clear_screen()
+        print(f"Carregando capitulos de: {novel['title']}")
         capitulos = extrair_links_pdf(novel["url"])
         if not capitulos:
-            print("Nenhum capitulo encontrado para esta novel.")
+            inquirer.confirm(message="Nenhum capitulo encontrado. Voltar?", default=True).execute()
             continue
 
         selecionados = _selecionar_capitulos_ou_volumes(capitulos)
         if not selecionados:
-            print("Nenhum capitulo selecionado.")
+            if not inquirer.confirm(
+                message="Nenhum capitulo selecionado. Tentar novamente?",
+                default=True,
+            ).execute():
+                return
             continue
 
         gerar_cbz = _perguntar_formato_saida()
-        print(
-            f"\nNovel: {novel['title']}\n"
-            f"Capitulos selecionados: {len(selecionados)}\n"
-            f"Volumes: {', '.join(_listar_volumes(selecionados))}"
-        )
-
-        confirmacao = input("\nContinuar com o download? (s/n): ").strip().lower()
-        if confirmacao != "s":
-            print("Cancelado.")
+        volumes = ", ".join(_listar_volumes(selecionados))
+        _clear_screen()
+        print(f"Novel: {novel['title']}")
+        print(f"Capitulos selecionados: {len(selecionados)}")
+        print(f"Volumes: {volumes}")
+        if not inquirer.confirm(message="Continuar com o download?", default=True).execute():
+            if not inquirer.confirm(message="Selecionar outra novel?", default=True).execute():
+                return
             continue
 
         download_capitulos_novel(selecionados, novel["title"], gerar_cbz=gerar_cbz)
-
-        repetir = input("\nDeseja baixar outra novel? (s/n): ").strip().lower()
-        if repetir != "s":
-            break
+        if not inquirer.confirm(message="Deseja baixar outra novel?", default=False).execute():
+            return
 
 
 def menu_conversao():
-    print("=" * 60)
-    print("PDF para CBZ - Conversor")
-    print("=" * 60)
-
     while True:
-        print("\nMENU CONVERSAO")
-        print("-" * 40)
-        print("1. Converter arquivo PDF")
-        print("2. Converter pasta")
-        print("3. Converter tudo (com subpastas)")
-        print("4. Configuracoes")
-        print("5. Voltar")
-        print("-" * 40)
-        escolha = input("\nOpcao: ").strip()
+        _clear_screen()
+        escolha = inquirer.select(
+            message="MENU CONVERSAO",
+            choices=[
+                {"name": "Converter arquivo PDF", "value": "arquivo"},
+                {"name": "Converter pasta", "value": "pasta"},
+                {"name": "Converter tudo (com subpastas)", "value": "pasta_rec"},
+                {"name": "Configuracoes", "value": "config"},
+                {"name": "Voltar", "value": "voltar"},
+            ],
+            cycle=True,
+        ).execute()
 
-        if escolha == "1":
-            pdf_path = input("\nPDF: ").strip().strip('"')
-            if not pdf_path:
-                print("[ERRO] Caminho vazio")
-                continue
-            output_folder = input("Saida (Enter = mesma pasta): ").strip().strip('"')
-            output_folder = output_folder if output_folder else None
-            resultado = converter_pdf_para_cbz(pdf_path, output_folder)
-            print(f"\n[SUCESSO] {resultado}" if resultado else "\n[ERRO] Falhou")
-        elif escolha == "2":
-            pasta_path = input("\nPasta: ").strip().strip('"')
-            if not pasta_path:
-                print("[ERRO] Caminho vazio")
-                continue
-            output_folder = input("Saida (Enter = mesma pasta): ").strip().strip('"')
-            output_folder = output_folder if output_folder else None
-            sucessos, falhas = processar_pasta(pasta_path, output_folder, recursive=False)
-            _imprimir_resultado_conversao(sucessos, falhas)
-        elif escolha == "3":
-            pasta_path = input("\nPasta: ").strip().strip('"')
-            if not pasta_path:
-                print("[ERRO] Caminho vazio")
-                continue
-            output_folder = input("Saida (Enter = mesma pasta): ").strip().strip('"')
-            output_folder = output_folder if output_folder else None
-            sucessos, falhas = processar_pasta(pasta_path, output_folder, recursive=True)
-            _imprimir_resultado_conversao(sucessos, falhas)
-        elif escolha == "4":
-            print("\n" + "=" * 60)
+        if escolha == "voltar":
+            return
+
+        if escolha == "config":
+            _clear_screen()
             print("CONFIGURACOES")
-            print("=" * 60)
+            print("=" * 40)
             print(f"Qualidade JPG: {QUALIDADE_JPG}")
             print(f"DPI: {DPI}")
-            print("=" * 60)
-            input("\nEnter...")
-        elif escolha == "5":
-            break
-        else:
-            print("[ERRO] Opcao invalida")
+            inquirer.confirm(message="Voltar", default=True).execute()
+            continue
 
+        if escolha == "arquivo":
+            _converter_arquivo()
+            continue
 
-def menu_principal():
-    while True:
-        print("\n" + "=" * 60)
-        print("CENTRALNOVEL - MAIN")
-        print("=" * 60)
-        print("1. Download de novel")
-        print("2. Conversao PDF -> CBZ")
-        print("3. Sair")
-        print("-" * 40)
-        escolha = input("\nOpcao: ").strip()
+        if escolha == "pasta":
+            _converter_pasta(recursive=False)
+            continue
 
-        if escolha == "1":
-            menu_download()
-        elif escolha == "2":
-            menu_conversao()
-        elif escolha == "3":
-            print("\nEncerrando...")
-            break
-        else:
-            print("Opcao invalida")
+        if escolha == "pasta_rec":
+            _converter_pasta(recursive=True)
 
 
 def _selecionar_novel():
     top_novels = listar_top_novels(limite=10)
-    if top_novels:
-        print("\nTop 10 novels:")
-        for index, novel in enumerate(top_novels, 1):
-            print(f"{index}. {novel['title']}")
-    else:
-        print("\nNao foi possivel carregar o top 10 agora.")
+    choices = [{"name": f"{index}. {item['title']}", "value": item} for index, item in enumerate(top_novels, 1)]
+    choices.extend(
+        [
+            {"name": "Buscar por nome", "value": "buscar"},
+            {"name": "Informar link da novel", "value": "link"},
+            {"name": "Voltar", "value": None},
+        ]
+    )
 
-    print("\nDigite o numero da lista, nome da novel, link da novel, ou 'v' para voltar.")
-    entrada = input("Escolha: ").strip()
-    if entrada.lower() == "v":
+    escolha = inquirer.select(
+        message="Escolha uma novel",
+        choices=choices,
+        cycle=True,
+        height=min(20, len(choices) + 2),
+    ).execute()
+
+    if escolha is None:
         return None
+    if isinstance(escolha, dict):
+        return escolha
+    if escolha == "link":
+        return _selecionar_novel_por_link()
+    return _selecionar_novel_por_busca()
 
-    if entrada.isdigit() and top_novels:
-        idx = int(entrada)
-        if 1 <= idx <= len(top_novels):
-            return top_novels[idx - 1]
-        print("Indice invalido.")
-        return None
 
-    url = normalizar_url_novel(entrada)
-    if url:
+def _selecionar_novel_por_link():
+    while True:
+        entrada = inquirer.text(message="Cole o link da novel (ou vazio para voltar):").execute().strip()
+        if not entrada:
+            return None
+        url = normalizar_url_novel(entrada)
+        if not url:
+            if not inquirer.confirm(message="Link invalido. Tentar novamente?", default=True).execute():
+                return None
+            continue
         return {"title": obter_titulo_novel(url), "url": url}
 
-    resultados = buscar_novels_por_nome(entrada, limite=10)
-    if not resultados:
-        print("Nenhuma novel encontrada para esse nome.")
+
+def _selecionar_novel_por_busca():
+    termo = inquirer.text(message="Digite o nome da novel (ou vazio para voltar):").execute().strip()
+    if not termo:
         return None
 
-    print("\nResultados:")
-    for index, item in enumerate(resultados, 1):
-        print(f"{index}. {item['title']}")
-    escolha = input("Selecione o numero do resultado (ou Enter para cancelar): ").strip()
-    if not escolha:
+    resultados = buscar_novels_por_nome(termo, limite=20)
+    if not resultados:
+        inquirer.confirm(message="Nenhuma novel encontrada. Voltar?", default=True).execute()
         return None
-    if not escolha.isdigit():
-        print("Entrada invalida.")
-        return None
-    idx = int(escolha)
-    if not (1 <= idx <= len(resultados)):
-        print("Indice invalido.")
-        return None
-    return resultados[idx - 1]
+
+    escolha = inquirer.select(
+        message="Resultados da busca",
+        choices=[{"name": item["title"], "value": item} for item in resultados]
+        + [{"name": "Voltar", "value": None}],
+        cycle=True,
+        height=min(20, len(resultados) + 3),
+    ).execute()
+    return escolha
 
 
 def _selecionar_capitulos_ou_volumes(capitulos):
-    volumes_disponiveis = _listar_volumes(capitulos)
+    modo = inquirer.select(
+        message="Selecione o tipo de download",
+        choices=[
+            {"name": "Capitulos especificos", "value": "caps"},
+            {"name": "Volumes completos", "value": "vols"},
+            {"name": "Cancelar", "value": "cancel"},
+        ],
+        cycle=True,
+    ).execute()
+
+    if modo == "cancel":
+        return []
+    if modo == "caps":
+        return _selecionar_capitulos(capitulos)
+    return _selecionar_volumes(capitulos)
+
+
+def _selecionar_capitulos(capitulos):
     cap_nums = sorted({int(item["capitulo"]) for item in capitulos})
-    print("\nSelecao de download:")
-    print("1. Capitulos especificos (ex: 1,2,10-15)")
-    print("2. Volumes completos (ex: 1,2,5-7)")
-    escolha = input("Opcao: ").strip()
-
-    if escolha == "1":
-        print(f"Capitulos disponiveis: {cap_nums[0]} ate {cap_nums[-1]}")
-        entrada = input("Digite os capitulos: ").strip()
-        try:
-            selecionados = set(parse_numero_lista_ou_intervalo(entrada))
-        except ValueError:
-            print("Formato invalido.")
-            return []
-        return [item for item in capitulos if int(item["capitulo"]) in selecionados]
-
-    if escolha == "2":
-        print("Volumes disponiveis:")
-        for index, volume in enumerate(volumes_disponiveis, 1):
-            print(f"{index}. {volume}")
-        print("Digite indices (ex: 1,3-5) ou nomes (ex: Extra, Side Story 1)")
-        entrada = input("Digite os volumes: ").strip()
-        return _filtrar_por_volumes(capitulos, volumes_disponiveis, entrada)
-
-    print("Opcao invalida.")
-    return []
-
-
-def _perguntar_formato_saida():
-    print("\nFormato de saida:")
-    print("1. Baixar apenas PDF")
-    print("2. Baixar PDF e converter para CBZ")
-    escolha = input("Opcao: ").strip()
-    return escolha == "2"
-
-
-def _listar_volumes(capitulos):
-    return sorted({item["volume"] for item in capitulos}, key=_ordenar_volume)
-
-
-def _filtrar_por_volumes(capitulos, volumes_disponiveis, entrada):
+    entrada = inquirer.text(
+        message=(
+            f"Digite os capitulos ({cap_nums[0]} a {cap_nums[-1]}), "
+            "ex: 1,2,10-15. Vazio cancela:"
+        )
+    ).execute().strip()
     if not entrada:
         return []
 
     try:
-        indices = parse_numero_lista_ou_intervalo(entrada)
-        validos = [idx for idx in indices if 1 <= idx <= len(volumes_disponiveis)]
-        volumes_escolhidos = {volumes_disponiveis[idx - 1] for idx in validos}
-        return [item for item in capitulos if item["volume"] in volumes_escolhidos]
+        selecionados = set(parse_numero_lista_ou_intervalo(entrada))
     except ValueError:
-        nomes = {_normalizar_volume(parte) for parte in entrada.split(",") if parte.strip()}
-        return [item for item in capitulos if _normalizar_volume(item["volume"]) in nomes]
+        inquirer.confirm(message="Formato invalido. Voltar?", default=True).execute()
+        return []
+    return [item for item in capitulos if int(item["capitulo"]) in selecionados]
+
+
+def _selecionar_volumes(capitulos):
+    volumes_disponiveis = _listar_volumes(capitulos)
+    selecionados = inquirer.checkbox(
+        message="Selecione um ou mais volumes (espaco marca, enter confirma)",
+        choices=[{"name": volume, "value": volume} for volume in volumes_disponiveis],
+        cycle=True,
+        height=min(20, len(volumes_disponiveis) + 2),
+    ).execute()
+    if not selecionados:
+        return []
+    volumes_set = set(selecionados)
+    return [item for item in capitulos if item["volume"] in volumes_set]
+
+
+def _perguntar_formato_saida():
+    escolha = inquirer.select(
+        message="Formato de saida",
+        choices=[
+            {"name": "Baixar apenas PDF", "value": "pdf"},
+            {"name": "Baixar PDF e converter para CBZ", "value": "cbz"},
+        ],
+        cycle=True,
+    ).execute()
+    return escolha == "cbz"
+
+
+def _converter_arquivo():
+    _clear_screen()
+    pdf_path = inquirer.text(message="Caminho do PDF (vazio cancela):").execute().strip().strip('"')
+    if not pdf_path:
+        return
+    output_folder = inquirer.text(message="Pasta de saida (vazio = mesma pasta):").execute().strip().strip('"')
+    output_folder = output_folder if output_folder else None
+    resultado = converter_pdf_para_cbz(pdf_path, output_folder)
+    _clear_screen()
+    print(f"[SUCESSO] {resultado}" if resultado else "[ERRO] Falhou")
+    inquirer.confirm(message="Voltar", default=True).execute()
+
+
+def _converter_pasta(recursive):
+    _clear_screen()
+    pasta_path = inquirer.text(message="Caminho da pasta (vazio cancela):").execute().strip().strip('"')
+    if not pasta_path:
+        return
+    output_folder = inquirer.text(message="Pasta de saida (vazio = mesma pasta):").execute().strip().strip('"')
+    output_folder = output_folder if output_folder else None
+    sucessos, falhas = processar_pasta(pasta_path, output_folder, recursive=recursive)
+    _clear_screen()
+    _imprimir_resultado_conversao(sucessos, falhas)
+    inquirer.confirm(message="Voltar", default=True).execute()
+
+
+def _listar_volumes(capitulos):
+    return sorted({item["volume"] for item in capitulos}, key=_ordenar_volume)
 
 
 def _ordenar_volume(value):
@@ -244,6 +282,10 @@ def _normalizar_volume(value):
     return " ".join(str(value).strip().lower().split())
 
 
+def _clear_screen():
+    os.system("cls" if os.name == "nt" else "clear")
+
+
 def _imprimir_resultado_conversao(sucessos, falhas):
     print(f"\n{'=' * 60}")
     print("RESULTADO")
@@ -251,3 +293,4 @@ def _imprimir_resultado_conversao(sucessos, falhas):
     print(f"Sucessos: {sucessos}")
     print(f"Falhas: {falhas}")
     print(f"{'=' * 60}")
+

@@ -1,6 +1,7 @@
 """PDF download operations."""
 
 import os
+import re
 import time
 
 import requests
@@ -65,7 +66,7 @@ def download_capitulos_novel(capitulos, novel_title, gerar_cbz=False):
 
     sucesso = 0
     falhas = 0
-    novel_dir = limpar_nome_arquivo(novel_title) or "Novel"
+    novel_dir = _limpar_nome_pasta(novel_title) or "Novel"
 
     print(f"\nIniciando download de {len(capitulos)} capitulos")
     if gerar_cbz:
@@ -109,22 +110,25 @@ def _montar_caminho_pdf(cap, novel_dir):
 
 
 def _montar_pasta_pdf(volume, novel_dir):
-    pasta = os.path.join(PDF_ROOT_DIR, novel_dir, _formatar_nome_pasta_volume(volume))
+    pasta = os.path.join(PDF_ROOT_DIR, _formatar_nome_pasta_volume(volume, novel_dir))
     os.makedirs(pasta, exist_ok=True)
     return pasta
 
 
 def _montar_pasta_cbz(volume, novel_dir):
-    pasta = os.path.join(CBZ_ROOT_DIR, novel_dir, _formatar_nome_pasta_volume(volume))
+    pasta = os.path.join(CBZ_ROOT_DIR, _formatar_nome_pasta_volume(volume, novel_dir))
     os.makedirs(pasta, exist_ok=True)
     return pasta
 
 
-def _formatar_nome_pasta_volume(volume):
+def _formatar_nome_pasta_volume(volume, novel_dir):
     volume_texto = str(volume).strip()
-    if volume_texto.isdigit():
-        return f"Vol_{volume_texto.zfill(2)}"
-    return f"Vol_{limpar_nome_arquivo(volume_texto)}"
+    return f"{novel_dir} Vol {volume_texto}"
+
+
+def _limpar_nome_pasta(texto):
+    texto = re.sub(r'[<>:"/\\|?*]', "", str(texto))
+    return " ".join(texto.split())
 
 
 def download_capitulo_especifico(numero_capitulo, dados=None):
