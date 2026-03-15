@@ -1,8 +1,9 @@
-# Centralnovel Downloader - Lord of Mysteries
+# Centralnovel Downloader
 
 Projeto em Python para:
-- baixar capitulos em PDF da Centralnovel
-- converter PDF em CBZ
+- baixar capitulos de qualquer novel da Centralnovel
+- selecionar capitulos especificos ou volumes completos
+- converter PDF para CBZ no mesmo fluxo de download
 
 ## Execucao principal
 
@@ -13,20 +14,28 @@ python main.py
 ```
 
 Menu principal:
-1. Download de PDFs
+1. Download de novel
 2. Conversao PDF -> CBZ
 3. Sair
 
-## Entradas legadas (compatibilidade)
+## Fluxo de download
 
-Ainda funcionam:
+No menu de download:
+1. lista top 10 novels do site
+2. voce escolhe por numero, nome da novel ou link da novel
+3. escolhe baixar capitulos especificos ou volumes completos (aceita varios: `1,2,10-15`)
+4. escolhe formato:
+   - apenas PDF
+   - PDF + conversao automatica para CBZ
 
-```powershell
-python download_pdfs.py
-python pdf_to_cbz.py
+## Pastas de saida (padrao)
+
+Todos os arquivos ficam separados por novel e volume:
+
+```text
+PDF/<Novel>/Vol_XX/*.pdf
+CBZ/<Novel>/Vol_XX/*.cbz
 ```
-
-Esses arquivos agora sao wrappers que chamam os menus modulares.
 
 ## Instalar dependencias
 
@@ -41,8 +50,6 @@ pip install -r requirements.txt
 ```text
 centralnovel-downloader/
 ├── main.py
-├── download_pdfs.py
-├── pdf_to_cbz.py
 ├── centralnovel/
 │   ├── __init__.py
 │   ├── config.py
@@ -53,6 +60,12 @@ centralnovel-downloader/
 │   ├── converter.py
 │   └── menus.py
 ├── requirements.txt
+│   └── selection.py
+├── Backup/
+│   ├── download_pdfs.py
+│   └── pdf_to_cbz.py
+├── PDF/
+├── CBZ/
 └── links_capitulos.csv
 ```
 
@@ -63,4 +76,5 @@ Edite `centralnovel/config.py`:
 - `MAX_RETRIES`
 - `QUALIDADE_JPG`
 - `DPI`
-
+- `PDF_ROOT_DIR`
+- `CBZ_ROOT_DIR`

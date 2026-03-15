@@ -5,9 +5,10 @@ import time
 
 import requests
 
-from .config import DELAY_ENTRE_DOWNLOADS, HEADERS, MAX_RETRIES
+from .config import CBZ_ROOT_DIR, DELAY_ENTRE_DOWNLOADS, HEADERS, MAX_RETRIES, PDF_ROOT_DIR
+from .converter import converter_pdf_para_cbz
 from .csv_store import carregar_links_csv
-from .download_utils import criar_pasta_volume, limpar_nome_arquivo
+from .download_utils import limpar_nome_arquivo
 from .scraper import obter_token_pdf
 
 
@@ -28,6 +29,7 @@ def baixar_pdf(post_id, url_pdf_page, caminho_destino, tentativa=1):
         response = requests.get(pdf_url_com_token, headers=headers, timeout=60, stream=True)
         response.raise_for_status()
 
+        os.makedirs(os.path.dirname(caminho_destino), exist_ok=True)
         with open(caminho_destino, "wb") as file_obj:
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
@@ -56,11 +58,73 @@ def baixar_pdf(post_id, url_pdf_page, caminho_destino, tentativa=1):
         return False
 
 
-def _montar_caminho_saida(cap):
-    pasta = criar_pasta_volume(cap["volume"])
+def download_capitulos_novel(capitulos, novel_title, gerar_cbz=False):
+    if not capitulos:
+        print("Nenhum capitulo selecionado")
+        return 0, 0
+
+    sucesso = 0
+    falhas = 0
+    novel_dir = limpar_nome_arquivo(novel_title) or "Novel"
+
+    print(f"\nIniciando download de {len(capitulos)} capitulos")
+    if gerar_cbz:
+        print("Modo: PDF + conversao automatica para CBZ")
+    else:
+        print("Modo: apenas PDF")
+
+    for index, cap in enumerate(capitulos, 1):
+        print(f"\n[{index}/{len(capitulos)}] Vol. {cap['volume']} Cap. {cap['capitulo']}: {cap['titulo']}")
+        caminho_pdf = _montar_caminho_pdf(cap, novel_dir)
+
+        if baixar_pdf(cap.get("post_id"), cap["url"], caminho_pdf):
+            sucesso += 1
+            if gerar_cbz:
+                pasta_cbz = _montar_pasta_cbz(cap["volume"], novel_dir)
+                resultado = converter_pdf_para_cbz(
+                    caminho_pdf,
+                    output_folder=pasta_cbz,
+                    keep_images=False,
+                    verbose=False,
+                )
+                if resultado:
+                    print(f"CBZ gerado: {os.path.basename(resultado)}")
+                else:
+                    print("Falha na conversao para CBZ")
+        else:
+            falhas += 1
+
+        if index < len(capitulos):
+            time.sleep(DELAY_ENTRE_DOWNLOADS)
+
+    _imprimir_resultado(sucesso, falhas)
+    return sucesso, falhas
+
+
+def _montar_caminho_pdf(cap, novel_dir):
+    pasta = _montar_pasta_pdf(cap["volume"], novel_dir)
     titulo_limpo = limpar_nome_arquivo(cap["titulo"])
     nome_arquivo = f"Capitulo_{cap['capitulo'].zfill(3)}_{titulo_limpo}.pdf"
     return os.path.join(pasta, nome_arquivo)
+
+
+def _montar_pasta_pdf(volume, novel_dir):
+    pasta = os.path.join(PDF_ROOT_DIR, novel_dir, _formatar_nome_pasta_volume(volume))
+    os.makedirs(pasta, exist_ok=True)
+    return pasta
+
+
+def _montar_pasta_cbz(volume, novel_dir):
+    pasta = os.path.join(CBZ_ROOT_DIR, novel_dir, _formatar_nome_pasta_volume(volume))
+    os.makedirs(pasta, exist_ok=True)
+    return pasta
+
+
+def _formatar_nome_pasta_volume(volume):
+    volume_texto = str(volume).strip()
+    if volume_texto.isdigit():
+        return f"Vol_{volume_texto.zfill(2)}"
+    return f"Vol_{limpar_nome_arquivo(volume_texto)}"
 
 
 def download_capitulo_especifico(numero_capitulo, dados=None):
@@ -69,16 +133,11 @@ def download_capitulo_especifico(numero_capitulo, dados=None):
     if not dados:
         print("Execute a opcao de extrair links primeiro")
         return
-
     capitulo = next((item for item in dados if item["capitulo"] == str(numero_capitulo)), None)
     if not capitulo:
         print(f"Capitulo {numero_capitulo} nao encontrado")
         return
-
-    print(f"\nBaixando capitulo {numero_capitulo}...")
-    caminho_completo = _montar_caminho_saida(capitulo)
-    if baixar_pdf(capitulo.get("post_id"), capitulo["url"], caminho_completo):
-        print(f"\nCapitulo {numero_capitulo} baixado")
+    download_capitulos_novel([capitulo], "Legacy")
 
 
 def download_intervalo(inicio, fim, dados=None):
@@ -87,15 +146,11 @@ def download_intervalo(inicio, fim, dados=None):
     if not dados:
         print("Execute a opcao de extrair links primeiro")
         return
-
     capitulos_filtrados = [item for item in dados if inicio <= int(item["capitulo"]) <= fim]
     if not capitulos_filtrados:
         print(f"Nenhum capitulo no intervalo {inicio}-{fim}")
         return
-
-    print(f"\nBaixando {len(capitulos_filtrados)} capitulos ({inicio}-{fim})...")
-    sucesso, falhas = _executar_download_em_lote(capitulos_filtrados)
-    _imprimir_resultado(sucesso, falhas)
+    download_capitulos_novel(capitulos_filtrados, "Legacy")
 
 
 def download_volume(numero_volume, dados=None):
@@ -104,29 +159,11 @@ def download_volume(numero_volume, dados=None):
     if not dados:
         print("Execute a opcao de extrair links primeiro")
         return
-
     capitulos_do_volume = [item for item in dados if item["volume"] == str(numero_volume)]
     if not capitulos_do_volume:
         print(f"Volume {numero_volume} nao encontrado")
-        volumes_disponiveis = sorted(set(item["volume"] for item in dados))
-        print(f"Volumes disponiveis: {', '.join(volumes_disponiveis)}")
         return
-
-    print(f"\nBaixando Volume {numero_volume}...")
-    print(f"Total de capitulos: {len(capitulos_do_volume)}")
-    print(
-        f"Capitulos: {capitulos_do_volume[0]['capitulo']} "
-        f"ate {capitulos_do_volume[-1]['capitulo']}"
-    )
-    print(f"Tempo estimado: ~{len(capitulos_do_volume) * DELAY_ENTRE_DOWNLOADS / 60:.1f} min")
-
-    confirmacao = input("\nContinuar? (s/n): ")
-    if confirmacao.lower() != "s":
-        print("Cancelado")
-        return
-
-    sucesso, falhas = _executar_download_em_lote(capitulos_do_volume)
-    _imprimir_resultado(sucesso, falhas)
+    download_capitulos_novel(capitulos_do_volume, "Legacy")
 
 
 def download_todos(dados=None):
@@ -135,32 +172,7 @@ def download_todos(dados=None):
     if not dados:
         print("Execute a opcao de extrair links primeiro")
         return
-
-    print(f"\nBaixando TODOS os {len(dados)} capitulos...")
-    print(f"Tempo estimado: ~{len(dados) * DELAY_ENTRE_DOWNLOADS / 60:.1f} min")
-
-    confirmacao = input("\nContinuar? (s/n): ")
-    if confirmacao.lower() != "s":
-        print("Cancelado")
-        return
-
-    sucesso, falhas = _executar_download_em_lote(dados)
-    _imprimir_resultado(sucesso, falhas)
-
-
-def _executar_download_em_lote(capitulos):
-    sucesso = 0
-    falhas = 0
-    for index, cap in enumerate(capitulos, 1):
-        print(f"\n[{index}/{len(capitulos)}] Vol. {cap['volume']} Cap. {cap['capitulo']}: {cap['titulo']}")
-        caminho_completo = _montar_caminho_saida(cap)
-        if baixar_pdf(cap.get("post_id"), cap["url"], caminho_completo):
-            sucesso += 1
-        else:
-            falhas += 1
-        if index < len(capitulos):
-            time.sleep(DELAY_ENTRE_DOWNLOADS)
-    return sucesso, falhas
+    download_capitulos_novel(dados, "Legacy")
 
 
 def _imprimir_resultado(sucesso, falhas):
@@ -168,4 +180,3 @@ def _imprimir_resultado(sucesso, falhas):
     print(f"Sucessos: {sucesso}")
     print(f"Falhas: {falhas}")
     print(f"{'=' * 50}")
-
