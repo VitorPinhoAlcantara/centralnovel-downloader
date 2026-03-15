@@ -1,117 +1,66 @@
 # Centralnovel Downloader - Lord of Mysteries
 
-Projeto em Python para baixar capitulos da novel **Lord of Mysteries** no site Centralnovel e converter PDFs em CBZ.
+Projeto em Python para:
+- baixar capitulos em PDF da Centralnovel
+- converter PDF em CBZ
 
-Site oficial: https://centralnovel.com/
+## Execucao principal
 
-AVISO LEGAL
-- Este projeto nao tem consentimento do site oficial.
-- O conteudo baixado pertence ao site Centralnovel.
-- Ao usar este projeto, voce deve respeitar todos os direitos do Centralnovel sobre os volumes baixados.
+Use o arquivo unico `main.py`:
 
----
+```powershell
+python main.py
+```
 
-## Passo a passo: criar e usar venv
+Menu principal:
+1. Download de PDFs
+2. Conversao PDF -> CBZ
+3. Sair
 
-No diretório do projeto:
+## Entradas legadas (compatibilidade)
+
+Ainda funcionam:
+
+```powershell
+python download_pdfs.py
+python pdf_to_cbz.py
+```
+
+Esses arquivos agora sao wrappers que chamam os menus modulares.
+
+## Instalar dependencias
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-```
-
-Instale as dependencias:
-
-```powershell
 pip install -r requirements.txt
 ```
 
-Para sair do venv:
+## Estrutura nova
 
-```powershell
-deactivate
-```
-
-Se der erro de permissao de script:
-
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-```
-
----
-
-## Script 1: download_pdfs.py
-
-### Como executar
-```powershell
-python download_pdfs.py
-```
-
-### Funcoes do menu
-1. Extrair links - busca todos os capitulos disponiveis e gera `links_capitulos.csv`
-2. Baixar todos - baixa todos os capitulos
-3. Baixar especifico - baixa um capitulo (ex: 213)
-4. Baixar intervalo - baixa um intervalo (ex: 1-50)
-
-### Fluxo recomendado (primeira vez)
-1. Execute o script
-2. Escolha a opcao 1 para extrair os links
-3. Depois use a opcao 2, 3 ou 4 para baixar
-
-### Configuracoes (no arquivo)
-Em `download_pdfs.py`:
-- `DELAY_ENTRE_DOWNLOADS`: tempo entre downloads
-- `MAX_RETRIES`: tentativas por capitulo
-
-### Saida esperada
-```
-Novel Download/
-├── links_capitulos.csv
-├── lord-of-mysteries-01/
-│   ├── Capitulo_001_Titulo.pdf
-│   └── ...
-└── lord-of-mysteries-02/
-    └── ...
-```
-
----
-
-## Script 2: pdf_to_cbz.py
-
-### Como executar
-```powershell
-python pdf_to_cbz.py
-```
-
-### Funcoes do menu
-1. Converter arquivo - converte um PDF especifico
-2. Converter pasta - converte todos os PDFs de uma pasta
-3. Converter tudo - converte todos os PDFs (inclui subpastas)
-
-### Configuracoes (no arquivo)
-Em `pdf_to_cbz.py`:
-- `QUALIDADE_JPG`: qualidade das imagens (0-100)
-- `DPI`: resolucao da conversao
-
-### Saida esperada
-```
-Capitulo_001_Carmesim.pdf -> Capitulo_001_Carmesim.cbz
-```
-
----
-
-## Estrutura do projeto
-```
+```text
 centralnovel-downloader/
+├── main.py
 ├── download_pdfs.py
 ├── pdf_to_cbz.py
-├── README.md
-└── requirements.txt
+├── centralnovel/
+│   ├── __init__.py
+│   ├── config.py
+│   ├── csv_store.py
+│   ├── download_utils.py
+│   ├── downloader.py
+│   ├── scraper.py
+│   ├── converter.py
+│   └── menus.py
+├── requirements.txt
+└── links_capitulos.csv
 ```
 
----
+## Ajustes de configuracao
 
-## Dicas
-- O script de download pula arquivos ja baixados.
-- Para evitar erro 429, nao reduza muito o `DELAY_ENTRE_DOWNLOADS`.
-- Teste a conversao em 1 capitulo antes de converter tudo.
+Edite `centralnovel/config.py`:
+- `DELAY_ENTRE_DOWNLOADS`
+- `MAX_RETRIES`
+- `QUALIDADE_JPG`
+- `DPI`
+
