@@ -36,3 +36,8 @@ desktop.ini
 
 # Poppler (se incluído localmente)
 poppler/
+
+# PyInstaller (build do .exe)
+build/
+dist/
+*.spec

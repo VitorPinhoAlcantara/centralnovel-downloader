@@ -3,10 +3,19 @@
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 
 import requests
 
-from .config import CBZ_ROOT_DIR, DELAY_ENTRE_DOWNLOADS, HEADERS, MAX_RETRIES, PDF_ROOT_DIR
+from .config import (
+    CBZ_ROOT_DIR,
+    DELAY_ENTRE_DOWNLOADS,
+    HEADERS,
+    MAX_DOWNLOADS_PARALELOS,
+    MAX_RETRIES,
+    PDF_ROOT_DIR,
+)
 from .converter import converter_pdf_para_cbz
 from .csv_store import carregar_links_csv
 from .download_utils import limpar_nome_arquivo
@@ -64,42 +73,58 @@ def download_capitulos_novel(capitulos, novel_title, gerar_cbz=False):
         print("Nenhum capitulo selecionado")
         return 0, 0
 
-    sucesso = 0
-    falhas = 0
     novel_dir = _limpar_nome_pasta(novel_title) or "Novel"
+    total = len(capitulos)
 
-    print(f"\nIniciando download de {len(capitulos)} capitulos")
+    print(f"\nIniciando download de {total} capitulos ({MAX_DOWNLOADS_PARALELOS} em paralelo)")
     if gerar_cbz:
         print("Modo: PDF + conversao automatica para CBZ")
     else:
         print("Modo: apenas PDF")
 
-    for index, cap in enumerate(capitulos, 1):
-        print(f"\n[{index}/{len(capitulos)}] Vol. {cap['volume']} Cap. {cap['capitulo']}: {cap['titulo']}")
-        caminho_pdf = _montar_caminho_pdf(cap, novel_dir)
+    resultado_lock = Lock()
+    contadores = {"sucesso": 0, "falhas": 0, "concluidos": 0}
 
-        if baixar_pdf(cap.get("post_id"), cap["url"], caminho_pdf):
-            sucesso += 1
-            if gerar_cbz:
-                pasta_cbz = _montar_pasta_cbz(cap["volume"], novel_dir)
-                resultado = converter_pdf_para_cbz(
-                    caminho_pdf,
-                    output_folder=pasta_cbz,
-                    keep_images=False,
-                    verbose=False,
-                )
-                if resultado:
-                    print(f"CBZ gerado: {os.path.basename(resultado)}")
+    def _baixar_capitulo(cap):
+        caminho_pdf = _montar_caminho_pdf(cap, novel_dir)
+        sucesso_download = baixar_pdf(cap.get("post_id"), cap["url"], caminho_pdf)
+
+        cbz_gerado = None
+        if sucesso_download and gerar_cbz:
+            pasta_cbz = _montar_pasta_cbz(cap["volume"], novel_dir)
+            cbz_gerado = converter_pdf_para_cbz(
+                caminho_pdf,
+                output_folder=pasta_cbz,
+                keep_images=False,
+                verbose=False,
+            )
+
+        with resultado_lock:
+            contadores["concluidos"] += 1
+            if sucesso_download:
+                contadores["sucesso"] += 1
+            else:
+                contadores["falhas"] += 1
+            print(
+                f"\n[{contadores['concluidos']}/{total}] "
+                f"Vol. {cap['volume']} Cap. {cap['capitulo']}: {cap['titulo']}"
+            )
+            if sucesso_download and gerar_cbz:
+                if cbz_gerado:
+                    print(f"CBZ gerado: {os.path.basename(cbz_gerado)}")
                 else:
                     print("Falha na conversao para CBZ")
-        else:
-            falhas += 1
 
-        if index < len(capitulos):
-            time.sleep(DELAY_ENTRE_DOWNLOADS)
+    with ThreadPoolExecutor(max_workers=MAX_DOWNLOADS_PARALELOS) as executor:
+        futures = []
+        for cap in capitulos:
+            futures.append(executor.submit(_baixar_capitulo, cap))
+            time.sleep(0.3)
+        for future in as_completed(futures):
+            future.result()
 
-    _imprimir_resultado(sucesso, falhas)
-    return sucesso, falhas
+    _imprimir_resultado(contadores["sucesso"], contadores["falhas"])
+    return contadores["sucesso"], contadores["falhas"]
 
 
 def _montar_caminho_pdf(cap, novel_dir):
