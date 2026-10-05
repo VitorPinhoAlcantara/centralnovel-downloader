@@ -41,3 +41,7 @@ poppler/
 build/
 dist/
 *.spec
+
+# Audiolivro (token do Audiobookshelf e arquivos temporarios)
+audiobook_config.json
+audiobook_work/

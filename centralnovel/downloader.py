@@ -19,19 +19,22 @@ from .config import (
 from .converter import converter_pdf_para_cbz
 from .csv_store import carregar_links_csv
 from .download_utils import limpar_nome_arquivo
+from .pdf_cleaner import limpar_pdf
 from .scraper import obter_token_pdf
 
 
-def baixar_pdf(post_id, url_pdf_page, caminho_destino, tentativa=1):
+def baixar_pdf(post_id, url_pdf_page, caminho_destino, tentativa=1, sobrescrever=False):
+    """Retorna (sucesso, motivo_do_erro)."""
+    caminho_tmp = f"{caminho_destino}.part"
     try:
-        if os.path.exists(caminho_destino):
+        if os.path.exists(caminho_destino) and not sobrescrever:
             print(f"Ja existe: {os.path.basename(caminho_destino)}")
-            return True
+            return True, None
 
         pdf_url_com_token = obter_token_pdf(post_id, url_pdf_page)
         if not pdf_url_com_token:
             print("Nao foi possivel obter token")
-            return False
+            return False, "Nao foi possivel obter token"
 
         time.sleep(0.5)
         headers = HEADERS.copy()
@@ -40,40 +43,63 @@ def baixar_pdf(post_id, url_pdf_page, caminho_destino, tentativa=1):
         response.raise_for_status()
 
         os.makedirs(os.path.dirname(caminho_destino), exist_ok=True)
-        with open(caminho_destino, "wb") as file_obj:
+        with open(caminho_tmp, "wb") as file_obj:
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     file_obj.write(chunk)
 
-        if os.path.getsize(caminho_destino) < 1000:
+        if os.path.getsize(caminho_tmp) < 1000:
             print("Arquivo muito pequeno, pode estar corrompido")
-            os.remove(caminho_destino)
-            return False
+            return False, "Arquivo baixado muito pequeno (possivelmente corrompido)"
 
+        try:
+            limpar_pdf(caminho_tmp)
+        except Exception as exc:
+            print(f"Aviso: nao foi possivel limpar o PDF: {exc}")
+
+        # o arquivo antigo so e trocado depois que o novo foi baixado por completo
+        os.replace(caminho_tmp, caminho_destino)
         print(
             f"Baixado: {os.path.basename(caminho_destino)} "
             f"({os.path.getsize(caminho_destino)} bytes)"
         )
-        return True
+        return True, None
     except requests.exceptions.HTTPError as exc:
         if exc.response.status_code == 429 and tentativa < MAX_RETRIES:
             wait_time = DELAY_ENTRE_DOWNLOADS * tentativa * 2
             print(f"Erro 429. Aguardando {wait_time}s...")
             time.sleep(wait_time)
-            return baixar_pdf(post_id, url_pdf_page, caminho_destino, tentativa + 1)
+            return baixar_pdf(post_id, url_pdf_page, caminho_destino, tentativa + 1, sobrescrever)
         print(f"Erro HTTP: {exc}")
-        return False
+        return False, f"Erro HTTP: {exc}"
     except Exception as exc:
         print(f"Erro: {exc}")
-        return False
+        return False, f"Erro: {exc}"
+    finally:
+        if os.path.exists(caminho_tmp):
+            os.remove(caminho_tmp)
 
 
-def download_capitulos_novel(capitulos, novel_title, gerar_cbz=False):
+def separar_baixados(capitulos, novel_title, gerar_cbz=False):
+    """Retorna (ja_baixados, faltantes). Com CBZ, exige o PDF e o CBZ."""
+    novel_dir = _nome_pasta_novel(novel_title)
+    existentes, faltantes = [], []
+    for cap in capitulos:
+        caminho_pdf = _montar_caminho_pdf(cap, novel_dir)
+        baixado = os.path.exists(caminho_pdf)
+        if baixado and gerar_cbz:
+            baixado = os.path.exists(_montar_caminho_cbz(cap, novel_dir))
+        (existentes if baixado else faltantes).append(cap)
+    return existentes, faltantes
+
+
+def download_capitulos_novel(capitulos, novel_title, gerar_cbz=False, sobrescrever=False):
+    """Retorna {"sucessos": int, "falhas": [{"cap": cap, "motivo": str}]}."""
     if not capitulos:
         print("Nenhum capitulo selecionado")
-        return 0, 0
+        return {"sucessos": 0, "falhas": []}
 
-    novel_dir = _limpar_nome_pasta(novel_title) or "Novel"
+    novel_dir = _nome_pasta_novel(novel_title)
     total = len(capitulos)
 
     print(f"\nIniciando download de {total} capitulos ({MAX_DOWNLOADS_PARALELOS} em paralelo)")
@@ -81,50 +107,61 @@ def download_capitulos_novel(capitulos, novel_title, gerar_cbz=False):
         print("Modo: PDF + conversao automatica para CBZ")
     else:
         print("Modo: apenas PDF")
+    if sobrescrever:
+        print("Arquivos ja existentes serao sobrescritos")
 
     resultado_lock = Lock()
-    contadores = {"sucesso": 0, "falhas": 0, "concluidos": 0}
+    contadores = {"sucesso": 0, "concluidos": 0}
+    falhas = []
 
-    def _baixar_capitulo(cap):
-        caminho_pdf = _montar_caminho_pdf(cap, novel_dir)
-        sucesso_download = baixar_pdf(cap.get("post_id"), cap["url"], caminho_pdf)
-
+    def _baixar_capitulo(indice, cap):
+        motivo = None
         cbz_gerado = None
-        if sucesso_download and gerar_cbz:
-            pasta_cbz = _montar_pasta_cbz(cap["volume"], novel_dir)
-            cbz_gerado = converter_pdf_para_cbz(
-                caminho_pdf,
-                output_folder=pasta_cbz,
-                keep_images=False,
-                verbose=False,
+        try:
+            caminho_pdf = _montar_caminho_pdf(cap, novel_dir)
+            sucesso, motivo = baixar_pdf(
+                cap.get("post_id"), cap["url"], caminho_pdf, sobrescrever=sobrescrever
             )
+            if sucesso and gerar_cbz:
+                cbz_gerado = converter_pdf_para_cbz(
+                    caminho_pdf,
+                    output_folder=_montar_pasta_cbz(cap["volume"], novel_dir),
+                    keep_images=False,
+                    verbose=False,
+                    sobrescrever=True,
+                )
+                if not cbz_gerado:
+                    sucesso, motivo = False, "Falha na conversao para CBZ"
+        except Exception as exc:
+            sucesso, motivo = False, f"Erro inesperado: {exc}"
 
         with resultado_lock:
             contadores["concluidos"] += 1
-            if sucesso_download:
+            if sucesso:
                 contadores["sucesso"] += 1
             else:
-                contadores["falhas"] += 1
+                falhas.append({"indice": indice, "cap": cap, "motivo": motivo})
             print(
                 f"\n[{contadores['concluidos']}/{total}] "
                 f"Vol. {cap['volume']} Cap. {cap['capitulo']}: {cap['titulo']}"
             )
-            if sucesso_download and gerar_cbz:
-                if cbz_gerado:
-                    print(f"CBZ gerado: {os.path.basename(cbz_gerado)}")
-                else:
-                    print("Falha na conversao para CBZ")
+            if not sucesso:
+                print(f"ERRO: {motivo}")
+            elif gerar_cbz:
+                print(f"CBZ gerado: {os.path.basename(cbz_gerado)}")
 
     with ThreadPoolExecutor(max_workers=MAX_DOWNLOADS_PARALELOS) as executor:
         futures = []
-        for cap in capitulos:
-            futures.append(executor.submit(_baixar_capitulo, cap))
+        for indice, cap in enumerate(capitulos):
+            futures.append(executor.submit(_baixar_capitulo, indice, cap))
             time.sleep(0.3)
         for future in as_completed(futures):
             future.result()
 
-    _imprimir_resultado(contadores["sucesso"], contadores["falhas"])
-    return contadores["sucesso"], contadores["falhas"]
+    falhas.sort(key=lambda item: item["indice"])
+    falhas = [{"cap": item["cap"], "motivo": item["motivo"]} for item in falhas]
+    _imprimir_resultado(contadores["sucesso"], len(falhas))
+    return {"sucessos": contadores["sucesso"], "falhas": falhas}
 
 
 def _montar_caminho_pdf(cap, novel_dir):
@@ -135,20 +172,26 @@ def _montar_caminho_pdf(cap, novel_dir):
 
 
 def _montar_pasta_pdf(volume, novel_dir):
-    pasta = os.path.join(PDF_ROOT_DIR, _formatar_nome_pasta_volume(volume, novel_dir))
-    os.makedirs(pasta, exist_ok=True)
-    return pasta
+    return os.path.join(PDF_ROOT_DIR, _formatar_nome_pasta_volume(volume, novel_dir))
 
 
 def _montar_pasta_cbz(volume, novel_dir):
-    pasta = os.path.join(CBZ_ROOT_DIR, _formatar_nome_pasta_volume(volume, novel_dir))
-    os.makedirs(pasta, exist_ok=True)
-    return pasta
+    return os.path.join(CBZ_ROOT_DIR, _formatar_nome_pasta_volume(volume, novel_dir))
+
+
+def _montar_caminho_cbz(cap, novel_dir):
+    pasta = _montar_pasta_cbz(cap["volume"], novel_dir)
+    nome_pdf = os.path.basename(_montar_caminho_pdf(cap, novel_dir))
+    return os.path.join(pasta, f"{os.path.splitext(nome_pdf)[0]}.cbz")
 
 
 def _formatar_nome_pasta_volume(volume, novel_dir):
     volume_texto = str(volume).strip()
     return f"{novel_dir} Vol {volume_texto}"
+
+
+def _nome_pasta_novel(novel_title):
+    return _limpar_nome_pasta(novel_title) or "Novel"
 
 
 def _limpar_nome_pasta(texto):

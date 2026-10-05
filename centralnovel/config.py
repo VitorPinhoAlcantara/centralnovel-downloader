@@ -20,3 +20,8 @@ DPI = 150
 LINKS_CSV = "links_capitulos.csv"
 PDF_ROOT_DIR = "PDF"
 CBZ_ROOT_DIR = "CBZ"
+LOG_DIR = "logs"
+
+# Limpeza do PDF baixado (primeira pagina)
+REMOVER_LINK_PDF = True
+REMOVER_MARCA_TRADUCAO = True

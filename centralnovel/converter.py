@@ -74,7 +74,10 @@ def criar_cbz(image_paths, cbz_path, verbose=True):
         return False
 
 
-def converter_pdf_para_cbz(pdf_path, output_folder=None, keep_images=False, verbose=True):
+def converter_pdf_para_cbz(
+    pdf_path, output_folder=None, keep_images=False, verbose=True, sobrescrever=None
+):
+    """sobrescrever: True sobrescreve, False pula, None pergunta no terminal."""
     pdf_path = Path(pdf_path)
     if not pdf_path.exists():
         print(f"[ERRO] Nao encontrado: {pdf_path}")
@@ -90,10 +93,11 @@ def converter_pdf_para_cbz(pdf_path, output_folder=None, keep_images=False, verb
         output_path.mkdir(parents=True, exist_ok=True)
 
     cbz_path = output_path / f"{pdf_path.stem}.cbz"
-    if cbz_path.exists():
+    if cbz_path.exists() and sobrescrever is not True:
         print(f"[!] Ja existe: {cbz_path.name}")
-        resposta = input("    Sobrescrever? (s/n): ")
-        if resposta.lower() != "s":
+        if sobrescrever is None:
+            sobrescrever = input("    Sobrescrever? (s/n): ").lower() == "s"
+        if not sobrescrever:
             print("    [CANCELADO]")
             return None
 
