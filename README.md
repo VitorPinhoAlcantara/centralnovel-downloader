@@ -94,7 +94,7 @@ No menu de download voce marca o que gerar (espaco marca, enter confirma), em qu
 - **CBZ** (se o PDF nao foi marcado, o PDF baixado so como etapa intermediaria e apagado depois do CBZ; um PDF que ja existia e preservado)
 - **Audiolivro (Audiobookshelf)**
 
-Com **Audiolivro** marcado, os capitulos sao processados um por vez (PDF, CBZ e audio de cada capitulo em sequencia), o que tambem reduz o risco de bloqueio do site. Sem audiolivro, os downloads continuam em paralelo. O item "Gerar audiolivro" do menu principal e um atalho com o audiolivro ja marcado.
+Com **Audiolivro** marcado, os downloads (PDF/CBZ) sao feitos um por vez e no maximo 6 capitulos a frente do audio (`MAX_CAPITULOS_A_FRENTE` em `centralnovel/config.py`): o audio comeca assim que o primeiro capitulo e baixado e o proximo download so acontece quando um dos anteriores termina o audio. Capitulos que ja tem audio no servidor so geram o PDF/CBZ que faltar. Sem audiolivro, os downloads continuam em paralelo. O item "Gerar audiolivro" do menu principal e um atalho com o audiolivro ja marcado.
 
 ## Audiolivro (XTTS + Audiobookshelf)
 

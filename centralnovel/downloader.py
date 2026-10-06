@@ -1,7 +1,9 @@
 """PDF download operations."""
 
 import os
+import queue
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
@@ -12,6 +14,7 @@ from .config import (
     CBZ_ROOT_DIR,
     DELAY_ENTRE_DOWNLOADS,
     HEADERS,
+    MAX_CAPITULOS_A_FRENTE,
     MAX_DOWNLOADS_PARALELOS,
     MAX_RETRIES,
     PDF_ROOT_DIR,
@@ -121,9 +124,13 @@ def download_capitulos_novel(capitulos, novel_title, saidas=None, sobrescrever=F
 
     novel_dir = _nome_pasta_novel(novel_title)
     total = len(capitulos)
-    paralelos = 1 if "audio" in saidas else MAX_DOWNLOADS_PARALELOS
+    com_audio = "audio" in saidas
+    paralelos = 1 if com_audio else MAX_DOWNLOADS_PARALELOS
 
-    print(f"\nIniciando {total} capitulos ({paralelos} em paralelo)")
+    if com_audio:
+        print(f"\nIniciando {total} capitulos (downloads um por vez, ate {MAX_CAPITULOS_A_FRENTE} a frente do audio)")
+    else:
+        print(f"\nIniciando {total} capitulos ({paralelos} em paralelo)")
     print(f"Saidas: {descrever_saidas(saidas)}")
     if sobrescrever:
         print("Arquivos ja existentes serao sobrescritos")
@@ -132,15 +139,7 @@ def download_capitulos_novel(capitulos, novel_title, saidas=None, sobrescrever=F
     contadores = {"sucesso": 0, "concluidos": 0}
     falhas = []
 
-    def _processar_capitulo(indice, cap):
-        sucesso, motivo = True, None
-        try:
-            sucesso, motivo = _gerar_saidas_capitulo(
-                cap, novel_dir, saidas, sobrescrever, sessao_audio
-            )
-        except Exception as exc:
-            sucesso, motivo = False, f"Erro inesperado: {exc}"
-
+    def _registrar(indice, cap, sucesso, motivo):
         with resultado_lock:
             contadores["concluidos"] += 1
             if sucesso:
@@ -154,14 +153,26 @@ def download_capitulos_novel(capitulos, novel_title, saidas=None, sobrescrever=F
             if not sucesso:
                 print(f"ERRO: {motivo}")
 
+    def _processar_capitulo(indice, cap):
+        try:
+            sucesso, motivo = _baixar_saidas_capitulo(cap, novel_dir, saidas, sobrescrever)
+        except Exception as exc:
+            sucesso, motivo = False, f"Erro inesperado: {exc}"
+        _registrar(indice, cap, sucesso, motivo)
+
     try:
-        with ThreadPoolExecutor(max_workers=paralelos) as executor:
-            futures = []
-            for indice, cap in enumerate(capitulos):
-                futures.append(executor.submit(_processar_capitulo, indice, cap))
-                time.sleep(0.3)
-            for future in as_completed(futures):
-                future.result()
+        if com_audio:
+            _executar_com_audio(
+                capitulos, novel_dir, saidas, sobrescrever, sessao_audio, _registrar
+            )
+        else:
+            with ThreadPoolExecutor(max_workers=paralelos) as executor:
+                futures = []
+                for indice, cap in enumerate(capitulos):
+                    futures.append(executor.submit(_processar_capitulo, indice, cap))
+                    time.sleep(0.3)
+                for future in as_completed(futures):
+                    future.result()
     finally:
         if sessao_audio is not None:
             sessao_audio.finalizar()
@@ -172,7 +183,45 @@ def download_capitulos_novel(capitulos, novel_title, saidas=None, sobrescrever=F
     return {"sucessos": contadores["sucesso"], "falhas": falhas}
 
 
-def _gerar_saidas_capitulo(cap, novel_dir, saidas, sobrescrever, sessao_audio):
+def _executar_com_audio(capitulos, novel_dir, saidas, sobrescrever, sessao_audio, registrar):
+    fila = queue.Queue()
+    vagas = threading.Semaphore(MAX_CAPITULOS_A_FRENTE)
+    parar = threading.Event()
+
+    def produtor():
+        for indice, cap in enumerate(capitulos):
+            vagas.acquire()
+            if parar.is_set():
+                break
+            try:
+                sucesso, motivo = _baixar_saidas_capitulo(cap, novel_dir, saidas, sobrescrever)
+            except Exception as exc:
+                sucesso, motivo = False, f"Erro inesperado: {exc}"
+            fila.put((indice, cap, sucesso, motivo))
+            time.sleep(0.3)
+        fila.put(None)
+
+    thread = threading.Thread(target=produtor, daemon=True)
+    thread.start()
+    try:
+        while True:
+            item = fila.get()
+            if item is None:
+                break
+            indice, cap, sucesso, motivo = item
+            try:
+                if sucesso and sessao_audio.pendente(cap, sobrescrever):
+                    sucesso, motivo = sessao_audio.gerar_capitulo(cap)
+            except Exception as exc:
+                sucesso, motivo = False, f"Erro inesperado: {exc}"
+            vagas.release()
+            registrar(indice, cap, sucesso, motivo)
+    finally:
+        parar.set()
+        vagas.release()
+
+
+def _baixar_saidas_capitulo(cap, novel_dir, saidas, sobrescrever):
     caminho_pdf = _montar_caminho_pdf(cap, novel_dir)
     caminho_cbz = _montar_caminho_cbz(cap, novel_dir)
 
@@ -199,11 +248,6 @@ def _gerar_saidas_capitulo(cap, novel_dir, saidas, sobrescrever, sessao_audio):
             print(f"CBZ gerado: {os.path.basename(cbz_gerado)}")
             if "pdf" not in saidas and not pdf_existia:
                 os.remove(caminho_pdf)
-
-    if "audio" in saidas and sessao_audio.pendente(cap, sobrescrever):
-        sucesso, motivo = sessao_audio.gerar_capitulo(cap)
-        if not sucesso:
-            return False, motivo
     return True, None
 
 
