@@ -4,12 +4,17 @@ import os
 
 from InquirerPy import inquirer
 
-from .audiolivro import gerar_audiolivro, listar_vozes, separar_pendentes
+from .audiolivro import SessaoAudiolivro, listar_vozes, separar_pendentes
 from .audiolivro_config import carregar_config
 from .config import DPI, QUALIDADE_JPG
 from .converter import converter_pdf_para_cbz, processar_pasta
 from .download_utils import gravar_log_falhas, resumir_capitulos
-from .downloader import download_capitulos_novel, separar_baixados
+from .downloader import (
+    chave_capitulo,
+    descrever_saidas,
+    download_capitulos_novel,
+    separar_baixados,
+)
 from .pdf_cleaner import limpar_pasta
 from .scraper import (
     buscar_novels_por_nome,
@@ -28,9 +33,8 @@ def menu_principal():
         escolha = inquirer.select(
             message="CENTRALNOVEL - MAIN",
             choices=[
-                {"name": "Download de novel", "value": "download"},
+                {"name": "Baixar / gerar (PDF, CBZ, Audiolivro)", "value": "download"},
                 {"name": "Conversao PDF -> CBZ", "value": "conversao"},
-                {"name": "Gerar audiolivro (Audiobookshelf)", "value": "audiolivro"},
                 {"name": "Sair", "value": "sair"},
             ],
             cycle=True,
@@ -40,20 +44,19 @@ def menu_principal():
             menu_download()
         elif escolha == "conversao":
             menu_conversao()
-        elif escolha == "audiolivro":
-            menu_audiolivro()
         else:
-            _clear_screen()
-            print("Encerrando...")
-            return
+            break
+    _clear_screen()
+    print("Encerrando...")
 
 
 def menu_download():
+    config = None
     while True:
         _clear_screen()
         novel = _selecionar_novel()
         if not novel:
-            return
+            return False
 
         _clear_screen()
         print(f"Carregando capitulos de: {novel['title']}")
@@ -62,7 +65,17 @@ def menu_download():
             inquirer.confirm(message="Nenhum capitulo encontrado. Voltar?", default=True).execute()
             continue
 
+        _processar_novel(novel, capitulos, config)
+
+
+def _processar_novel(novel, capitulos, config):
+    info = None
+    voz = None
+    saidas_anteriores = None
+    while True:
         selecionados = _selecionar_capitulos_ou_volumes(capitulos)
+        if selecionados is None:
+            return
         if not selecionados:
             if not inquirer.confirm(
                 message="Nenhum capitulo selecionado. Tentar novamente?",
@@ -71,11 +84,30 @@ def menu_download():
                 return
             continue
 
-        gerar_cbz = _perguntar_formato_saida()
-        plano = _resolver_ja_baixados(selecionados, novel["title"], gerar_cbz)
-        if plano is None:
-            if not inquirer.confirm(message="Selecionar outra novel?", default=True).execute():
+        saidas = _perguntar_saidas(saidas_anteriores)
+        saidas_anteriores = saidas
+        criar_sessao = None
+        audio_prontos = set()
+        if "audio" in saidas:
+            config = config or carregar_config()
+            info = info or obter_info_novel(novel["url"])
+            try:
+                prontos, _ = separar_pendentes(selecionados, novel["title"], info, config)
+            except RuntimeError as exc:
+                print(f"[ERRO] Servidor do Audiobookshelf indisponivel: {exc}")
+                if not inquirer.confirm(message="Tentar novamente?", default=True).execute():
+                    return
+                continue
+            audio_prontos = {chave_capitulo(cap) for cap in prontos}
+            voz = voz or _escolher_voz(config)
+            if not voz:
                 return
+
+            def criar_sessao(voz=voz, info=info, config=config):
+                return SessaoAudiolivro(novel["title"], novel["url"], voz, config, info)
+
+        plano = _resolver_ja_baixados(selecionados, novel["title"], saidas, audio_prontos)
+        if plano is None:
             continue
         selecionados, sobrescrever = plano
 
@@ -84,82 +116,17 @@ def menu_download():
         print(f"Novel: {novel['title']}")
         print(f"Capitulos selecionados: {len(selecionados)}")
         print(f"Volumes: {volumes}")
+        print(f"Saidas: {descrever_saidas(saidas)}")
         if sobrescrever:
             print("Arquivos ja existentes serao sobrescritos")
-        if not inquirer.confirm(message="Continuar com o download?", default=True).execute():
-            if not inquirer.confirm(message="Selecionar outra novel?", default=True).execute():
-                return
+        if not inquirer.confirm(message="Continuar?", default=True).execute():
             continue
 
         resultado = download_capitulos_novel(
-            selecionados, novel["title"], gerar_cbz=gerar_cbz, sobrescrever=sobrescrever
+            selecionados, novel["title"], saidas=saidas, sobrescrever=sobrescrever,
+            sessao_audio=criar_sessao() if criar_sessao else None,
         )
-        _tratar_falhas(resultado["falhas"], novel["title"], gerar_cbz, sobrescrever)
-        if not inquirer.confirm(message="Deseja baixar outra novel?", default=False).execute():
-            return
-
-
-def menu_audiolivro():
-    config = carregar_config()
-    while True:
-        _clear_screen()
-        novel = _selecionar_novel()
-        if not novel:
-            return
-
-        _clear_screen()
-        print(f"Carregando capitulos de: {novel['title']}")
-        capitulos = extrair_links_pdf(novel["url"])
-        if not capitulos:
-            inquirer.confirm(message="Nenhum capitulo encontrado. Voltar?", default=True).execute()
-            continue
-
-        selecionados = _selecionar_capitulos_ou_volumes(capitulos)
-        if not selecionados:
-            if not inquirer.confirm(
-                message="Nenhum capitulo selecionado. Tentar novamente?", default=True
-            ).execute():
-                return
-            continue
-
-        info = obter_info_novel(novel["url"])
-        try:
-            prontos, pendentes = separar_pendentes(selecionados, novel["title"], info, config)
-        except RuntimeError as exc:
-            print(f"[ERRO] Servidor do Audiobookshelf indisponivel: {exc}")
-            if not inquirer.confirm(message="Tentar novamente?", default=True).execute():
-                return
-            continue
-        _clear_screen()
-        print(f"Novel: {novel['title']} | Autor: {info['autor'] or config['autor_padrao']}")
-        print(f"Selecionados: {len(selecionados)} | ja no Audiobookshelf: {len(prontos)} | a gerar: {len(pendentes)}")
-        if pendentes:
-            print(f"A gerar: {resumir_capitulos(pendentes)}")
-        if not pendentes:
-            inquirer.confirm(message="Nada a gerar. Voltar?", default=True).execute()
-            continue
-
-        voz = _escolher_voz(config)
-        if not voz:
-            return
-        if not inquirer.confirm(
-            message=f"Gerar {len(pendentes)} audio(s) com a voz {voz}?", default=True
-        ).execute():
-            continue
-
-        resultado = gerar_audiolivro(pendentes, novel["title"], novel["url"], voz, config, info)
-        while resultado["falhas"]:
-            print(f"\n{len(resultado['falhas'])} capitulo(s) com erro: "
-                  f"{resumir_capitulos([f['cap'] for f in resultado['falhas']])}")
-            for falha in resultado["falhas"]:
-                print(f"  Cap. {falha['cap']['capitulo']}: {falha['motivo']}")
-            if not inquirer.confirm(message="Tentar novamente os que falharam?", default=True).execute():
-                break
-            resultado = gerar_audiolivro(
-                [f["cap"] for f in resultado["falhas"]], novel["title"], novel["url"], voz, config, info
-            )
-        if not inquirer.confirm(message="Gerar audiolivro de outra novel?", default=False).execute():
-            return
+        _tratar_falhas(resultado["falhas"], novel["title"], saidas, sobrescrever, criar_sessao)
 
 
 def _escolher_voz(config):
@@ -221,14 +188,13 @@ def menu_conversao():
             _converter_pasta(recursive=True)
 
 
-def _resolver_ja_baixados(capitulos, novel_title, gerar_cbz):
-    """Retorna (capitulos_a_baixar, sobrescrever) ou None se o usuario cancelar."""
-    existentes, faltantes = separar_baixados(capitulos, novel_title, gerar_cbz)
+def _resolver_ja_baixados(capitulos, novel_title, saidas, audio_prontos):
+    existentes, faltantes = separar_baixados(capitulos, novel_title, saidas, audio_prontos)
     if not existentes:
         return capitulos, False
 
     _clear_screen()
-    print(f"{len(existentes)} de {len(capitulos)} capitulos ja foram baixados:")
+    print(f"{len(existentes)} de {len(capitulos)} capitulos ja possuem as saidas escolhidas:")
     print(f"  {resumir_capitulos(existentes)}")
     if faltantes:
         print(f"Faltam {len(faltantes)}: {resumir_capitulos(faltantes)}")
@@ -237,10 +203,10 @@ def _resolver_ja_baixados(capitulos, novel_title, gerar_cbz):
     choices = []
     if faltantes:
         choices.append(
-            {"name": f"Baixar apenas os faltantes ({len(faltantes)})", "value": (faltantes, False)}
+            {"name": f"Processar apenas os faltantes ({len(faltantes)})", "value": (faltantes, False)}
         )
     choices.append(
-        {"name": f"Reescrever os ja baixados ({len(existentes)})", "value": (existentes, True)}
+        {"name": f"Reescrever os ja existentes ({len(existentes)})", "value": (existentes, True)}
     )
     if faltantes:
         choices.append(
@@ -255,7 +221,7 @@ def _resolver_ja_baixados(capitulos, novel_title, gerar_cbz):
     ).execute()
 
 
-def _tratar_falhas(falhas, novel_title, gerar_cbz, sobrescrever):
+def _tratar_falhas(falhas, novel_title, saidas, sobrescrever, criar_sessao=None):
     caminho_log = None
     while falhas:
         caminho_log = gravar_log_falhas(falhas, novel_title, caminho_log)
@@ -266,8 +232,9 @@ def _tratar_falhas(falhas, novel_title, gerar_cbz, sobrescrever):
         resultado = download_capitulos_novel(
             [item["cap"] for item in falhas],
             novel_title,
-            gerar_cbz=gerar_cbz,
+            saidas=saidas,
             sobrescrever=sobrescrever,
+            sessao_audio=criar_sessao() if criar_sessao else None,
         )
         falhas = resultado["falhas"]
 
@@ -342,13 +309,13 @@ def _selecionar_capitulos_ou_volumes(capitulos):
         choices=[
             {"name": "Capitulos especificos", "value": "caps"},
             {"name": "Volumes completos", "value": "vols"},
-            {"name": "Cancelar", "value": "cancel"},
+            {"name": "Voltar (escolher outra novel)", "value": "voltar"},
         ],
         cycle=True,
     ).execute()
 
-    if modo == "cancel":
-        return []
+    if modo == "voltar":
+        return None
     if modo == "caps":
         return _selecionar_capitulos(capitulos)
     return _selecionar_volumes(capitulos)
@@ -387,16 +354,21 @@ def _selecionar_volumes(capitulos):
     return [item for item in capitulos if item["volume"] in volumes_set]
 
 
-def _perguntar_formato_saida():
-    escolha = inquirer.select(
-        message="Formato de saida",
-        choices=[
-            {"name": "Baixar apenas PDF", "value": "pdf"},
-            {"name": "Baixar PDF e converter para CBZ", "value": "cbz"},
-        ],
-        cycle=True,
-    ).execute()
-    return escolha == "cbz"
+def _perguntar_saidas(anteriores=None):
+    padrao = set(anteriores) if anteriores else {"pdf"}
+    opcoes = [("pdf", "PDF"), ("cbz", "CBZ"), ("audio", "Audiolivro (Audiobookshelf)")]
+    return set(
+        inquirer.checkbox(
+            message="O que gerar? (espaco marca, enter confirma)",
+            choices=[
+                {"name": nome, "value": valor, "enabled": valor in padrao}
+                for valor, nome in opcoes
+            ],
+            validate=lambda escolhidos: len(escolhidos) > 0,
+            invalid_message="Selecione pelo menos uma opcao",
+            cycle=True,
+        ).execute()
+    )
 
 
 def _converter_arquivo():

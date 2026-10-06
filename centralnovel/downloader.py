@@ -80,33 +80,51 @@ def baixar_pdf(post_id, url_pdf_page, caminho_destino, tentativa=1, sobrescrever
             os.remove(caminho_tmp)
 
 
-def separar_baixados(capitulos, novel_title, gerar_cbz=False):
-    """Retorna (ja_baixados, faltantes). Com CBZ, exige o PDF e o CBZ."""
+def separar_baixados(capitulos, novel_title, saidas=None, audio_prontos=None):
+    saidas = _normalizar_saidas(saidas)
     novel_dir = _nome_pasta_novel(novel_title)
     existentes, faltantes = [], []
     for cap in capitulos:
-        caminho_pdf = _montar_caminho_pdf(cap, novel_dir)
-        baixado = os.path.exists(caminho_pdf)
-        if baixado and gerar_cbz:
-            baixado = os.path.exists(_montar_caminho_cbz(cap, novel_dir))
+        baixado = True
+        if "pdf" in saidas:
+            baixado = baixado and os.path.exists(_montar_caminho_pdf(cap, novel_dir))
+        if "cbz" in saidas:
+            baixado = baixado and os.path.exists(_montar_caminho_cbz(cap, novel_dir))
+        if "audio" in saidas:
+            baixado = baixado and chave_capitulo(cap) in (audio_prontos or set())
         (existentes if baixado else faltantes).append(cap)
     return existentes, faltantes
 
 
-def download_capitulos_novel(capitulos, novel_title, gerar_cbz=False, sobrescrever=False):
-    """Retorna {"sucessos": int, "falhas": [{"cap": cap, "motivo": str}]}."""
+def chave_capitulo(cap):
+    return (str(cap["volume"]).strip(), str(cap["capitulo"]).strip())
+
+
+def descrever_saidas(saidas):
+    nomes = {"pdf": "PDF", "cbz": "CBZ", "audio": "Audiolivro"}
+    return " + ".join(nomes[s] for s in ("pdf", "cbz", "audio") if s in saidas)
+
+
+def _normalizar_saidas(saidas):
+    return set(saidas) if saidas else {"pdf"}
+
+
+def download_capitulos_novel(capitulos, novel_title, saidas=None, sobrescrever=False,
+                             sessao_audio=None):
     if not capitulos:
         print("Nenhum capitulo selecionado")
         return {"sucessos": 0, "falhas": []}
 
+    saidas = _normalizar_saidas(saidas)
+    if "audio" in saidas and sessao_audio is None:
+        raise ValueError("saida 'audio' exige uma sessao de audiolivro")
+
     novel_dir = _nome_pasta_novel(novel_title)
     total = len(capitulos)
+    paralelos = 1 if "audio" in saidas else MAX_DOWNLOADS_PARALELOS
 
-    print(f"\nIniciando download de {total} capitulos ({MAX_DOWNLOADS_PARALELOS} em paralelo)")
-    if gerar_cbz:
-        print("Modo: PDF + conversao automatica para CBZ")
-    else:
-        print("Modo: apenas PDF")
+    print(f"\nIniciando {total} capitulos ({paralelos} em paralelo)")
+    print(f"Saidas: {descrever_saidas(saidas)}")
     if sobrescrever:
         print("Arquivos ja existentes serao sobrescritos")
 
@@ -114,24 +132,12 @@ def download_capitulos_novel(capitulos, novel_title, gerar_cbz=False, sobrescrev
     contadores = {"sucesso": 0, "concluidos": 0}
     falhas = []
 
-    def _baixar_capitulo(indice, cap):
-        motivo = None
-        cbz_gerado = None
+    def _processar_capitulo(indice, cap):
+        sucesso, motivo = True, None
         try:
-            caminho_pdf = _montar_caminho_pdf(cap, novel_dir)
-            sucesso, motivo = baixar_pdf(
-                cap.get("post_id"), cap["url"], caminho_pdf, sobrescrever=sobrescrever
+            sucesso, motivo = _gerar_saidas_capitulo(
+                cap, novel_dir, saidas, sobrescrever, sessao_audio
             )
-            if sucesso and gerar_cbz:
-                cbz_gerado = converter_pdf_para_cbz(
-                    caminho_pdf,
-                    output_folder=_montar_pasta_cbz(cap["volume"], novel_dir),
-                    keep_images=False,
-                    verbose=False,
-                    sobrescrever=True,
-                )
-                if not cbz_gerado:
-                    sucesso, motivo = False, "Falha na conversao para CBZ"
         except Exception as exc:
             sucesso, motivo = False, f"Erro inesperado: {exc}"
 
@@ -147,21 +153,58 @@ def download_capitulos_novel(capitulos, novel_title, gerar_cbz=False, sobrescrev
             )
             if not sucesso:
                 print(f"ERRO: {motivo}")
-            elif gerar_cbz:
-                print(f"CBZ gerado: {os.path.basename(cbz_gerado)}")
 
-    with ThreadPoolExecutor(max_workers=MAX_DOWNLOADS_PARALELOS) as executor:
-        futures = []
-        for indice, cap in enumerate(capitulos):
-            futures.append(executor.submit(_baixar_capitulo, indice, cap))
-            time.sleep(0.3)
-        for future in as_completed(futures):
-            future.result()
+    try:
+        with ThreadPoolExecutor(max_workers=paralelos) as executor:
+            futures = []
+            for indice, cap in enumerate(capitulos):
+                futures.append(executor.submit(_processar_capitulo, indice, cap))
+                time.sleep(0.3)
+            for future in as_completed(futures):
+                future.result()
+    finally:
+        if sessao_audio is not None:
+            sessao_audio.finalizar()
 
     falhas.sort(key=lambda item: item["indice"])
     falhas = [{"cap": item["cap"], "motivo": item["motivo"]} for item in falhas]
     _imprimir_resultado(contadores["sucesso"], len(falhas))
     return {"sucessos": contadores["sucesso"], "falhas": falhas}
+
+
+def _gerar_saidas_capitulo(cap, novel_dir, saidas, sobrescrever, sessao_audio):
+    caminho_pdf = _montar_caminho_pdf(cap, novel_dir)
+    caminho_cbz = _montar_caminho_cbz(cap, novel_dir)
+
+    quer_pdf = "pdf" in saidas and (sobrescrever or not os.path.exists(caminho_pdf))
+    quer_cbz = "cbz" in saidas and (sobrescrever or not os.path.exists(caminho_cbz))
+
+    if quer_pdf or quer_cbz:
+        pdf_existia = os.path.exists(caminho_pdf)
+        sucesso, motivo = baixar_pdf(
+            cap.get("post_id"), cap["url"], caminho_pdf, sobrescrever=sobrescrever
+        )
+        if not sucesso:
+            return False, motivo
+        if quer_cbz:
+            cbz_gerado = converter_pdf_para_cbz(
+                caminho_pdf,
+                output_folder=_montar_pasta_cbz(cap["volume"], novel_dir),
+                keep_images=False,
+                verbose=False,
+                sobrescrever=True,
+            )
+            if not cbz_gerado:
+                return False, "Falha na conversao para CBZ"
+            print(f"CBZ gerado: {os.path.basename(cbz_gerado)}")
+            if "pdf" not in saidas and not pdf_existia:
+                os.remove(caminho_pdf)
+
+    if "audio" in saidas and sessao_audio.pendente(cap, sobrescrever):
+        sucesso, motivo = sessao_audio.gerar_capitulo(cap)
+        if not sucesso:
+            return False, motivo
+    return True, None
 
 
 def _montar_caminho_pdf(cap, novel_dir):

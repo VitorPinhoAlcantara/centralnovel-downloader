@@ -1,4 +1,4 @@
-"""Configuracao do fluxo de audiolivro (ebook2audiobook + Audiobookshelf).
+"""Configuracao do fluxo de audiolivro (XTTS + Audiobookshelf).
 
 Os valores ficam em `audiobook_config.json` (criado na primeira execucao, fora do git,
 porque guarda o token do Audiobookshelf). O token tambem pode vir da variavel ABS_TOKEN.
@@ -12,15 +12,9 @@ PASTA_TRABALHO = "audiobook_work"
 PASTA_ESPERA = f"{PASTA_TRABALHO}/espera_envio"  # audios prontos aguardando envio ao servidor
 
 PADRAO = {
-    # ebook2audiobook
-    "e2a_dir": r"C:\Users\vitor\Downloads\AuidoBook",
-    "e2a_app_dir": "ebook2audiobook",
-    "e2a_python": r"ebook2audiobook\python_env\Scripts\python.exe",
-    "e2a_launcher": "start-ebook2audiobook.py",
     "voz_dir": r"C:\Users\vitor\Downloads\AuidoBook\vozes",
     "voz_padrao": "voz_shadow_slave_ref.wav",
     "idioma": "por",
-    "motor": "xtts",
     "dispositivo": "cuda",
     "formato": "m4b",
     "xtts": {
@@ -30,6 +24,37 @@ PADRAO = {
         "top_p": 0.7,
         "speed": 1.1,
     },
+    "xtts_ref": {
+        "gpt_cond_len": 30,
+        "gpt_cond_chunk_len": 6,
+        "max_ref_length": 30,
+    },
+    "tts_python": r"C:\Users\vitor\Downloads\AuidoBook\ebook2audiobook\python_env\Scripts\python.exe",
+    "xtts_model_dir": (
+        r"C:\Users\vitor\Downloads\AuidoBook\ebook2audiobook\models\tts"
+        r"\models--coqui--XTTS-v2\snapshots\6c2b0d75eae4b7047358e3b6bd9325f857d43f77"
+    ),
+    "idioma_xtts": "pt",
+    "workers": 3,
+    "workers_adaptativo": True,
+    "gpu_util_baixo": 35,
+    "gpu_util_moderado": 70,
+    "vram_por_worker_mb": 3500,
+    "vram_reserva_mb": 2000,
+    "vram_critica_mb": 1000,
+    "vram_folga_mb": 2500,
+    "matmul": "highest",
+    "qa": {},
+    "qa_tentativas": 3,
+    "final_trecho": "e2a",
+    "asr": True,
+    "asr_modelo": "openai/whisper-small",
+    "asr_rodadas": 2,
+    "asr_variacao_params": {"2": {"temperature": 0.7, "top_p": 0.85}},
+    "normalizacao": {},
+    "bitrate": "96k",
+    "pausas_ms": {"frase": 250, "paragrafo": 700},
+    "latents_cache": f"{PASTA_TRABALHO}/latents",
     "lote_capitulos": 10,
     # Audiobookshelf
     # servidor remoto via SSH (deixe abs_ssh vazio para usar a pasta local abs_dir)

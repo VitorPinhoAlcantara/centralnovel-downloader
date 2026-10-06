@@ -1,25 +1,14 @@
-"""Gera audiolivros dos capitulos: texto do site -> EPUB -> ebook2audiobook -> Audiobookshelf.
-
-Estrutura gravada no Audiobookshelf (Autor/Serie/Livro), com um arquivo por capitulo:
-
-    <pasta de livros>/<Autor>/<Novel>/Vol. 2 - <Novel> Volume 2/0096 - Capitulo 96 - Exilio.m4b
-
-A pasta de livros e local (`abs_dir`) ou, com `abs_ssh`, a de um servidor remoto (`abs_remote_dir`).
-
-O Audiobookshelf junta os arquivos de uma mesma pasta em um unico livro (capitulos como
-faixas) e reconhece a serie e o numero do volume pelos nomes das pastas.
-"""
-
+import json
 import os
 import re
 import shutil
-import subprocess
-import time
+import threading
+import zlib
 
 import requests
 
 from .audiolivro_config import PASTA_ESPERA, PASTA_TRABALHO, carregar_config
-from .epub_writer import criar_epub
+from .epub_writer import criar_epub_volume
 from .servidor_abs import (
     enviar_espera,
     listar_existentes,
@@ -28,13 +17,18 @@ from .servidor_abs import (
     verificar_destino,
 )
 from .texto_capitulo import baixar_capa, obter_info_novel, obter_texto_capitulo
+from .tts.dividir import dividir_paragrafos
+from .tts.gpu import escolher_workers
+from .tts.montar import codificar_m4b, montar_capitulo
+from .tts.normalizar import ajustar_final, normalizar
+from .tts.pool import PoolTTS
+from .tts.verificar import analisar
 
 
 def listar_vozes(config):
     pasta = config["voz_dir"]
     if not os.path.isdir(pasta):
         return []
-    # ignora arquivos grandes (ex.: o audio original completo do video)
     return sorted(
         nome for nome in os.listdir(pasta)
         if nome.lower().endswith(".wav")
@@ -43,7 +37,6 @@ def listar_vozes(config):
 
 
 def separar_pendentes(capitulos, novel_title, info, config):
-    """Retorna (ja_prontos, pendentes) conforme os arquivos ja existentes no Audiobookshelf."""
     autor = info.get("autor") or config["autor_padrao"]
     existentes = _listar_existentes(config, autor, novel_title)
     prontos, pendentes = [], []
@@ -53,62 +46,7 @@ def separar_pendentes(capitulos, novel_title, info, config):
     return prontos, pendentes
 
 
-def gerar_audiolivro(capitulos, novel_title, url_novel, voz, config=None, info=None):
-    """Converte os capitulos em audio e os publica na pasta do Audiobookshelf.
-
-    Retorna {"sucessos": int, "falhas": [{"cap": cap, "motivo": str}]}.
-    """
-    config = config or carregar_config()
-    erro = _validar_ambiente(config, voz)
-    if erro:
-        print(f"[ERRO] {erro}")
-        return {"sucessos": 0, "falhas": [{"cap": cap, "motivo": erro} for cap in capitulos]}
-
-    info = info or obter_info_novel(url_novel)
-    autor = info["autor"] or config["autor_padrao"]
-    print(f"Autor: {autor}")
-
-    try:
-        reenviados = enviar_espera(config, PASTA_ESPERA)
-        if reenviados:
-            print(f"{reenviados} arquivo(s) que aguardavam envio foram enviados ao servidor")
-        existentes = _listar_existentes(config, autor, novel_title)
-    except RuntimeError as exc:
-        erro = f"servidor do Audiobookshelf indisponivel: {exc}"
-        print(f"[ERRO] {erro}")
-        return {"sucessos": 0, "falhas": [{"cap": cap, "motivo": erro} for cap in capitulos]}
-
-    prontos = [c for c in capitulos if caminho_relativo(config, autor, novel_title, c) in existentes]
-    pendentes = [c for c in capitulos if c not in prontos]
-    if prontos:
-        print(f"{len(prontos)} capitulo(s) ja existem no Audiobookshelf e serao ignorados")
-    if not pendentes:
-        print("Nada a gerar")
-        return {"sucessos": 0, "falhas": []}
-
-    sucessos, falhas = 0, []
-    por_volume = {}
-    for cap in pendentes:
-        por_volume.setdefault(str(cap["volume"]), []).append(cap)
-
-    tamanho_lote = max(1, int(config["lote_capitulos"]))
-    for volume, caps in por_volume.items():
-        _garantir_capa(config, autor, novel_title, volume, info.get("capa", ""), existentes)
-        for inicio in range(0, len(caps), tamanho_lote):
-            lote = caps[inicio:inicio + tamanho_lote]
-            print(f"\n=== Vol. {volume}: capitulos {_resumo(lote)} ===")
-            ok, falhas_lote = _processar_lote(lote, novel_title, autor, voz, config)
-            sucessos += ok
-            falhas.extend(falhas_lote)
-            if ok:
-                escanear_biblioteca(config)
-
-    print(f"\nAudiolivro: {sucessos} gerado(s), {len(falhas)} falha(s)")
-    return {"sucessos": sucessos, "falhas": falhas}
-
-
 def caminho_relativo(config, autor, novel_title, cap):
-    """(Autor, Novel, pasta do livro, arquivo) dentro da pasta de livros do Audiobookshelf."""
     volume = str(cap["volume"]).strip()
     titulo_vol = config["titulo_volume"].format(novel=novel_title, volume=volume)
     pasta_livro = f"Vol. {volume} - {titulo_vol}" if volume.isdigit() else titulo_vol
@@ -119,19 +57,19 @@ def caminho_relativo(config, autor, novel_title, cap):
     )
 
 
+def caminho_epub_volume(config, autor, novel_title, volume):
+    cap_exemplo = {"volume": volume, "capitulo": "1", "titulo": "x"}
+    base = caminho_relativo(config, autor, novel_title, cap_exemplo)[:-1]
+    titulo_vol = config["titulo_volume"].format(novel=novel_title, volume=volume)
+    return base + (_nome_seguro(f"{titulo_vol}.epub"),)
+
+
 def caminho_destino(config, autor, novel_title, cap):
-    """Caminho local onde o audio e gravado (pasta de espera se o destino for remoto)."""
     raiz = raiz_publicacao(config, PASTA_ESPERA)
     return os.path.join(raiz, *caminho_relativo(config, autor, novel_title, cap))
 
 
-def _listar_existentes(config, autor, novel_title):
-    partes_base = (_nome_seguro(autor), _nome_seguro(novel_title))
-    return listar_existentes(config, partes_base, PASTA_ESPERA)
-
-
 def escanear_biblioteca(config):
-    """Pede ao Audiobookshelf um scan da biblioteca. Retorna True se solicitado."""
     token = config.get("abs_token", "")
     if not token:
         print("Aviso: sem token do Audiobookshelf (abs_token ou ABS_TOKEN); faca o scan manualmente.")
@@ -160,188 +98,354 @@ def escanear_biblioteca(config):
         return False
 
 
-def _processar_lote(lote, novel_title, autor, voz, config):
-    pasta_lote = os.path.join(
-        PASTA_TRABALHO, _nome_seguro(novel_title), f"lote_{int(time.time())}"
-    )
-    pasta_in = os.path.join(pasta_lote, "in")
-    pasta_out = os.path.join(pasta_lote, "out")
-    os.makedirs(pasta_in, exist_ok=True)
-    os.makedirs(pasta_out, exist_ok=True)
+class SessaoAudiolivro:
+    def __init__(self, novel_title, url_novel, voz, config=None, info=None):
+        self.novel_title = novel_title
+        self.url_novel = url_novel
+        self.voz = voz
+        self.config = config or carregar_config()
+        self.info = info
+        self.autor = None
+        self.existentes = set()
+        self.pool = None
+        self.publicados = []
+        self.volumes_com_capa = set()
+        self._preparada = False
+        self._erro_preparo = None
 
-    falhas, validos = [], []
-    for cap in lote:
+    def pendente(self, cap, sobrescrever=False):
+        self._preparar()
+        if self._erro_preparo:
+            return True
+        if sobrescrever:
+            return True
+        return caminho_relativo(self.config, self.autor, self.novel_title, cap) not in self.existentes
+
+    def gerar_capitulo(self, cap):
+        self._preparar()
+        if self._erro_preparo:
+            return False, self._erro_preparo
         try:
             paragrafos = obter_texto_capitulo(cap)
         except RuntimeError as exc:
-            falhas.append({"cap": cap, "motivo": f"texto indisponivel: {exc}"})
-            continue
+            return False, f"texto indisponivel: {exc}"
+
         numero = int(cap["capitulo"])
         volume = str(cap["volume"]).strip()
         titulo_cap = f"Capítulo {numero}: {cap['titulo']}"
-        # titulo unico por EPUB: evita colisao de nomes na saida do ebook2audiobook
-        criar_epub(
-            os.path.join(pasta_in, f"{numero:04d}.epub"),
-            titulo_livro=f"{novel_title} {numero:04d} {cap['titulo']}",
-            titulo_capitulo=titulo_cap,
-            paragrafos=paragrafos,
-            autor=autor,
-            serie=novel_title,
-            indice_serie=volume if volume.isdigit() else None,
-            idioma="pt",
+        self._garantir_capa(volume)
+        self._guardar_texto(volume, numero, titulo_cap, paragrafos)
+
+        opcoes = self.config.get("normalizacao", {})
+        textos = [normalizar(p, opcoes) for p in [titulo_cap] + list(paragrafos)]
+        pausas = self.config["pausas_ms"]
+        trechos = dividir_paragrafos(
+            [t for t in textos if t],
+            pausa_frase_ms=pausas["frase"],
+            pausa_paragrafo_ms=pausas["paragrafo"],
         )
-        validos.append(cap)
+        if not trechos:
+            return False, "capitulo sem texto apos a normalizacao"
 
-    if not validos:
-        shutil.rmtree(pasta_lote, ignore_errors=True)
-        return 0, falhas
-
-    codigo = _rodar_ebook2audiobook(pasta_in, pasta_out, voz, config)
-    if codigo != 0:
-        print(f"Aviso: ebook2audiobook terminou com codigo {codigo}; aproveitando o que foi gerado")
-
-    publicados = []
-    for cap in validos:
-        numero = int(cap["capitulo"])
-        origem = _achar_saida(pasta_out, numero, config["formato"])
-        if not origem:
-            falhas.append({"cap": cap, "motivo": "audio nao foi gerado pelo ebook2audiobook"})
-            continue
-        destino = caminho_destino(config, autor, novel_title, cap)
+        pasta = os.path.join(PASTA_TRABALHO, _nome_seguro(self.novel_title), f"cap_{volume}_{numero:04d}")
         try:
-            _publicar(origem, destino, cap, novel_title, autor, config)
-            publicados.append(cap)
-        except (OSError, RuntimeError) as exc:
-            falhas.append({"cap": cap, "motivo": f"falha ao publicar: {exc}"})
-
-    sucessos = len(publicados)
-    if publicados and modo_remoto(config):
-        try:
-            enviados = enviar_espera(config, PASTA_ESPERA)
-            print(f"Enviados ao servidor {config['abs_ssh']}: {enviados} arquivo(s)")
+            resultados = self._sintetizar(trechos, pasta, volume, numero)
         except RuntimeError as exc:
-            # os audios ficam na pasta de espera e sao reenviados na proxima execucao
-            falhas.extend(
-                {"cap": cap, "motivo": f"falha ao enviar ao servidor: {exc}"} for cap in publicados
+            return False, str(exc)
+
+        ausentes = [t["id"] for t in trechos if not os.path.exists(os.path.join(pasta, f"{t['id']}.wav"))]
+        if ausentes:
+            return False, f"{len(ausentes)} trecho(s) sem audio (ex.: {', '.join(ausentes[:5])})"
+
+        self._gravar_relatorio_qa(volume, numero, trechos, resultados)
+        wav = os.path.join(pasta, "capitulo.wav")
+        destino = caminho_destino(self.config, self.autor, self.novel_title, cap)
+        try:
+            duracao = montar_capitulo(trechos, pasta, wav)
+            codificar_m4b(wav, destino, self._metadados(cap, titulo_cap, volume, numero),
+                          bitrate=self.config["bitrate"])
+        except (OSError, RuntimeError) as exc:
+            return False, f"falha ao montar o audio: {exc}"
+
+        reprovados = [i for i, r in resultados.items() if not r.get("ok") or r.get("asr_motivos")]
+        print(f"Audio pronto: {duracao / 60:.1f} min, {len(trechos)} trechos, "
+              f"{len(reprovados)} com alerta de QA")
+        shutil.rmtree(pasta, ignore_errors=True)
+        self.publicados.append(cap)
+        self.existentes.add(caminho_relativo(self.config, self.autor, self.novel_title, cap))
+        if len(self.publicados) >= max(1, int(self.config["lote_capitulos"])):
+            self._publicar_lote()
+        return True, None
+
+    def finalizar(self):
+        try:
+            self._publicar_lote()
+        finally:
+            if self.pool is not None:
+                self.pool.encerrar()
+                self.pool = None
+
+    def _preparar(self):
+        if self._preparada:
+            return
+        self._preparada = True
+        erro = self._validar_ambiente()
+        if erro:
+            self._erro_preparo = erro
+            print(f"[ERRO] {erro}")
+            return
+        try:
+            if self.info is None:
+                self.info = obter_info_novel(self.url_novel)
+            self.autor = self.info.get("autor") or self.config["autor_padrao"]
+            print(f"Autor: {self.autor}")
+            reenviados = enviar_espera(self.config, PASTA_ESPERA)
+            if reenviados:
+                print(f"{reenviados} arquivo(s) que aguardavam envio foram enviados ao servidor")
+            self.existentes = _listar_existentes(self.config, self.autor, self.novel_title)
+        except RuntimeError as exc:
+            self._erro_preparo = f"servidor do Audiobookshelf indisponivel: {exc}"
+            print(f"[ERRO] {self._erro_preparo}")
+
+    def _validar_ambiente(self):
+        cfg = self.config
+        if not os.path.isfile(cfg["tts_python"]):
+            return f"Python do TTS nao encontrado: {cfg['tts_python']}"
+        if not os.path.isfile(os.path.join(cfg["xtts_model_dir"], "model.pth")):
+            return f"Modelo XTTS nao encontrado em: {cfg['xtts_model_dir']}"
+        if not os.path.isfile(os.path.join(cfg["voz_dir"], self.voz)):
+            return f"Voz nao encontrada: {os.path.join(cfg['voz_dir'], self.voz)}"
+        if shutil.which("ffmpeg") is None:
+            return "ffmpeg nao encontrado no PATH"
+        return verificar_destino(cfg)
+
+    def _iniciar_pool(self):
+        if self.pool is not None:
+            self._ajustar_pool()
+            return
+        n, leitura = escolher_workers(self.config, 0)
+        self._anunciar_workers(n, leitura)
+        voz_path = os.path.join(self.config["voz_dir"], self.voz)
+        pool = PoolTTS(self.config, [voz_path], workers=n, log_dir=os.path.join(PASTA_TRABALHO, "logs_tts"))
+        print(f"Carregando o XTTS ({pool.n_workers} worker(s))...")
+        try:
+            pool.iniciar()
+        except Exception as exc:
+            raise RuntimeError(f"falha ao iniciar o XTTS: {exc}") from exc
+        self.pool = pool
+
+    def _ajustar_pool(self):
+        n, leitura = escolher_workers(self.config, len(self.pool.workers))
+        if n == len(self.pool.workers):
+            return
+        self._anunciar_workers(n, leitura)
+        self.pool.redimensionar(n)
+
+    def _anunciar_workers(self, n, leitura):
+        if leitura:
+            print(f"GPU: uso {leitura['util']}%, VRAM {leitura['usada_mb']}/{leitura['total_mb']} MB -> {n} worker(s)")
+
+    def _sintetizar(self, trechos, pasta, volume, numero):
+        os.makedirs(pasta, exist_ok=True)
+        caminho_estado = os.path.join(pasta, "estado.json")
+        estado = {}
+        if os.path.exists(caminho_estado):
+            try:
+                with open(caminho_estado, "r", encoding="utf-8") as arquivo:
+                    estado = json.load(arquivo)
+            except (OSError, ValueError):
+                estado = {}
+
+        usa_asr = bool(self.config["asr"])
+        resultados = {}
+        jobs = []
+        sementes = {}
+        for trecho in trechos:
+            anterior = estado.get(trecho["id"])
+            wav = os.path.join(pasta, f"{trecho['id']}.wav")
+            sementes[trecho["id"]] = zlib.crc32(
+                f"{self.novel_title}:{volume}:{numero}:{trecho['id']}".encode("utf-8")
+            ) % 1000000
+            if (anterior and anterior.get("texto") == trecho["texto"]
+                    and anterior["res"].get("ok") and os.path.exists(wav)
+                    and (not usa_asr or anterior.get("verificado"))):
+                resultados[trecho["id"]] = anterior["res"]
+                continue
+            jobs.append(self._job(trecho, wav, sementes[trecho["id"]], 0))
+
+        if resultados:
+            print(f"Retomando: {len(resultados)} trecho(s) ja gerados")
+        if not jobs:
+            return resultados
+
+        self._iniciar_pool()
+        textos = {t["id"]: t["texto"] for t in trechos}
+        trava = threading.Lock()
+
+        def gravar_estado():
+            with open(caminho_estado, "w", encoding="utf-8") as arquivo:
+                json.dump(estado, arquivo, ensure_ascii=False)
+
+        def ao_concluir(resposta, feitos, total):
+            with trava:
+                estado[resposta["id"]] = {"texto": textos[resposta["id"]], "res": resposta}
+                gravar_estado()
+            if feitos % 10 == 0 or feitos == total:
+                print(f"  trechos {feitos}/{total}")
+
+        novos = self.pool.gerar(jobs, ao_concluir=ao_concluir)
+        resultados.update(novos)
+        if usa_asr:
+            self._verificar_asr(
+                [j["id"] for j in jobs], textos, pasta, sementes, resultados, estado, gravar_estado
             )
-            sucessos = 0
-    if sucessos:
+        return resultados
+
+    def _job(self, trecho, wav, semente, rodada):
+        finais = [self.config["final_trecho"], "sem", self.config["final_trecho"]]
+        job = {
+            "id": trecho["id"],
+            "texto": ajustar_final(trecho["texto"], finais[rodada % len(finais)]),
+            "saida": os.path.abspath(wav),
+            "seed": semente + rodada * 104729,
+            "tentativas": int(self.config["qa_tentativas"]),
+        }
+        variacao = self.config["asr_variacao_params"].get(str(rodada))
+        if variacao:
+            job["params"] = variacao
+        return job
+
+    def _verificar_asr(self, ids, textos, pasta, sementes, resultados, estado, gravar_estado):
+        pendentes = list(ids)
+        rodadas = int(self.config["asr_rodadas"])
+        por_id = {}
+        print(f"Verificando {len(pendentes)} trecho(s) com o Whisper...")
+        for rodada in range(rodadas + 1):
+            transcricoes = self.pool.transcrever(
+                [(i, os.path.join(pasta, f"{i}.wav")) for i in pendentes]
+            )
+            ruins = []
+            for i in pendentes:
+                analise = analisar(textos[i], transcricoes[i], self.config.get("asr_limites"))
+                por_id[i] = analise
+                resultados[i]["asr_motivos"] = analise["motivos"]
+                estado[i]["res"] = resultados[i]
+                estado[i]["verificado"] = True
+                if not analise["ok"]:
+                    ruins.append(i)
+            gravar_estado()
+            if not ruins or rodada == rodadas:
+                break
+            print(f"  rodada {rodada + 1}: regenerando {len(ruins)} trecho(s) com problema")
+            trechos_por_id = {i: {"id": i, "texto": textos[i]} for i in ruins}
+            jobs = [
+                self._job(trechos_por_id[i], os.path.join(pasta, f"{i}.wav"), sementes[i], rodada + 1)
+                for i in ruins
+            ]
+            novos = self.pool.gerar(jobs)
+            for i, res in novos.items():
+                resultados[i] = res
+                estado[i]["res"] = res
+                estado[i]["verificado"] = False
+            pendentes = ruins
+        restantes = [i for i, a in por_id.items() if not a["ok"]]
+        if restantes:
+            print(f"  {len(restantes)} trecho(s) ainda com alerta apos {rodadas} rodada(s) (veja o relatorio de QA)")
+
+    def _gravar_relatorio_qa(self, volume, numero, trechos, resultados):
+        pasta = os.path.join(PASTA_TRABALHO, "qa", _nome_seguro(self.novel_title))
+        os.makedirs(pasta, exist_ok=True)
+        textos = {t["id"]: t["texto"] for t in trechos}
+        alertas = [
+            {"id": i, "texto": textos.get(i, ""), "motivos": r.get("motivos"),
+             "asr_motivos": r.get("asr_motivos"),
+             "tentativas": r.get("tentativas"), "metricas": r.get("metricas")}
+            for i, r in sorted(resultados.items()) if not r.get("ok") or r.get("asr_motivos")
+        ]
+        with open(os.path.join(pasta, f"vol{volume}_cap{numero:04d}.json"), "w", encoding="utf-8") as arquivo:
+            json.dump({"trechos": len(trechos), "alertas": alertas}, arquivo, ensure_ascii=False, indent=1)
+
+    def _metadados(self, cap, titulo_cap, volume, numero):
+        album = self.config["titulo_volume"].format(novel=self.novel_title, volume=volume)
+        meta = {
+            "title": titulo_cap,
+            "artist": self.autor,
+            "album_artist": self.autor,
+            "album": album,
+            "track": str(numero),
+            "genre": "Audiobook",
+            "series": self.novel_title,
+            "language": self.config["idioma"],
+        }
+        if volume.isdigit():
+            meta["series-part"] = volume
+        return meta
+
+    def _garantir_capa(self, volume):
+        if volume in self.volumes_com_capa:
+            return
+        self.volumes_com_capa.add(volume)
+        cap_exemplo = {"volume": volume, "capitulo": "1", "titulo": "x"}
+        partes_capa = caminho_relativo(self.config, self.autor, self.novel_title, cap_exemplo)[:-1] + ("cover.jpg",)
+        url_capa = (self.info or {}).get("capa", "")
+        if not url_capa or partes_capa in self.existentes:
+            return
+        capa = os.path.join(raiz_publicacao(self.config, PASTA_ESPERA), *partes_capa)
+        os.makedirs(os.path.dirname(capa), exist_ok=True)
+        baixar_capa(url_capa, capa)
+
+    def _publicar_lote(self):
+        if not self.publicados:
+            return
+        publicados, self.publicados = self.publicados, []
+        for volume in sorted({str(cap["volume"]).strip() for cap in publicados}):
+            self._gerar_epub_volume(volume)
+        if modo_remoto(self.config):
+            try:
+                enviados = enviar_espera(self.config, PASTA_ESPERA)
+                print(f"Enviados ao servidor {self.config['abs_ssh']}: {enviados} arquivo(s)")
+            except RuntimeError as exc:
+                print(f"Aviso: falha ao enviar ao servidor ({exc}); os audios ficam na pasta de espera "
+                      "e serao reenviados na proxima execucao")
+                return
         for cap in publicados:
-            print("Publicado: " + "/".join(caminho_relativo(config, autor, novel_title, cap)))
-
-    if not falhas:
-        shutil.rmtree(pasta_lote, ignore_errors=True)
-    else:
-        print(f"Arquivos do lote mantidos em: {pasta_lote}")
-    return sucessos, falhas
+            print("Publicado: " + "/".join(caminho_relativo(self.config, self.autor, self.novel_title, cap)))
+        escanear_biblioteca(self.config)
 
 
-def _rodar_ebook2audiobook(pasta_in, pasta_out, voz, config):
-    e2a_dir = config["e2a_dir"]
-    xtts = config["xtts"]
-    cmd = [
-        os.path.join(e2a_dir, config["e2a_python"]), "-u",
-        os.path.join(e2a_dir, config["e2a_launcher"]),
-        "--headless",
-        "--ebooks_dir", os.path.abspath(pasta_in),
-        "--output_dir", os.path.abspath(pasta_out),
-        "--language", config["idioma"],
-        "--voice", _voz_para_e2a(voz, config),
-        "--tts_engine", config["motor"],
-        "--device", config["dispositivo"],
-        "--output_format", config["formato"],
-        "--temperature", str(xtts["temperature"]),
-        "--repetition_penalty", str(xtts["repetition_penalty"]),
-        "--top_k", str(xtts["top_k"]),
-        "--top_p", str(xtts["top_p"]),
-        "--speed", str(xtts["speed"]),
-    ]
-    env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
-    return subprocess.call(cmd, env=env)
+    def _pasta_textos(self, volume):
+        return os.path.join(PASTA_TRABALHO, "textos", _nome_seguro(self.novel_title), f"vol_{volume}")
+
+    def _guardar_texto(self, volume, numero, titulo_cap, paragrafos):
+        pasta = self._pasta_textos(volume)
+        os.makedirs(pasta, exist_ok=True)
+        with open(os.path.join(pasta, f"{numero:04d}.json"), "w", encoding="utf-8") as arquivo:
+            json.dump({"titulo": titulo_cap, "paragrafos": list(paragrafos)}, arquivo, ensure_ascii=False)
+
+    def _gerar_epub_volume(self, volume):
+        pasta = self._pasta_textos(volume)
+        if not os.path.isdir(pasta):
+            return
+        capitulos = []
+        for nome in sorted(os.listdir(pasta)):
+            with open(os.path.join(pasta, nome), "r", encoding="utf-8") as arquivo:
+                dados = json.load(arquivo)
+            capitulos.append((dados["titulo"], dados["paragrafos"]))
+        if not capitulos:
+            return
+        partes = caminho_epub_volume(self.config, self.autor, self.novel_title, volume)
+        destino = os.path.join(raiz_publicacao(self.config, PASTA_ESPERA), *partes)
+        os.makedirs(os.path.dirname(destino), exist_ok=True)
+        titulo_vol = self.config["titulo_volume"].format(novel=self.novel_title, volume=volume)
+        criar_epub_volume(
+            destino, titulo_vol, capitulos, autor=self.autor, serie=self.novel_title,
+            indice_serie=volume if volume.isdigit() else None, idioma="pt",
+        )
 
 
-def _voz_para_e2a(voz, config):
-    """Copia a voz para `<e2a>/ebook2audiobook/voices/<idioma>/` e devolve esse caminho.
-
-    O ebook2audiobook so usa a voz diretamente quando o caminho contem o codigo do idioma;
-    com a voz em outra pasta, do segundo capitulo do lote em diante ele tenta reconverter a
-    voz, falha e aborta o lote.
-    """
-    origem = os.path.join(config["voz_dir"], voz)
-    pasta = os.path.join(config["e2a_dir"], config["e2a_app_dir"], "voices", config["idioma"])
-    destino = os.path.join(pasta, voz)
-    os.makedirs(pasta, exist_ok=True)
-    if not os.path.exists(destino) or os.path.getsize(destino) != os.path.getsize(origem):
-        shutil.copyfile(origem, destino)
-    return destino
-
-
-def _achar_saida(pasta_out, numero, formato):
-    """Localiza o audio de um capitulo (o EPUB se chama NNNN.epub; o titulo comeca por NNNN)."""
-    prefixo = f"{numero:04d}"
-    candidatos = []
-    for raiz, _, arquivos in os.walk(pasta_out):
-        for nome in arquivos:
-            if nome.lower().endswith(f".{formato}") and (
-                nome.startswith(prefixo) or f" {prefixo} " in f" {nome} "
-            ):
-                candidatos.append(os.path.join(raiz, nome))
-    return max(candidatos, key=os.path.getmtime) if candidatos else None
-
-
-def _publicar(origem, destino, cap, novel_title, autor, config):
-    """Copia o audio para o Audiobookshelf regravando as tags (sem recodificar)."""
-    os.makedirs(os.path.dirname(destino), exist_ok=True)
-    volume = str(cap["volume"]).strip()
-    numero = int(cap["capitulo"])
-    album = config["titulo_volume"].format(novel=novel_title, volume=volume)
-    cmd = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", origem,
-        "-map", "0:a", "-map_chapters", "-1", "-c", "copy",
-        "-metadata", f"title=Capítulo {numero}: {cap['titulo']}",
-        "-metadata", f"artist={autor}",
-        "-metadata", f"album_artist={autor}",
-        "-metadata", f"album={album}",
-        "-metadata", f"track={numero}",
-        "-metadata", "genre=Audiobook",
-        "-metadata", f"series={novel_title}",
-        "-metadata", f"language={config['idioma']}",
-    ]
-    if volume.isdigit():
-        cmd += ["-metadata", f"series-part={volume}"]
-    cmd += ["-movflags", "+faststart+use_metadata_tags", destino]
-    resultado = subprocess.run(cmd, capture_output=True, text=True)
-    if resultado.returncode != 0:
-        raise RuntimeError(f"ffmpeg: {resultado.stderr.strip()[:200]}")
-
-
-def _garantir_capa(config, autor, novel_title, volume, url_capa, existentes):
-    cap_exemplo = {"volume": volume, "capitulo": "1", "titulo": "x"}
-    partes_capa = caminho_relativo(config, autor, novel_title, cap_exemplo)[:-1] + ("cover.jpg",)
-    if not url_capa or partes_capa in existentes:
-        return
-    capa = os.path.join(raiz_publicacao(config, PASTA_ESPERA), *partes_capa)
-    os.makedirs(os.path.dirname(capa), exist_ok=True)
-    baixar_capa(url_capa, capa)
-
-
-def _validar_ambiente(config, voz):
-    e2a_dir = config["e2a_dir"]
-    python_e2a = os.path.join(e2a_dir, config["e2a_python"])
-    if not os.path.isfile(python_e2a):
-        return f"Python do ebook2audiobook nao encontrado: {python_e2a}"
-    if not os.path.isfile(os.path.join(e2a_dir, config["e2a_launcher"])):
-        return f"Launcher nao encontrado: {os.path.join(e2a_dir, config['e2a_launcher'])}"
-    if not os.path.isfile(os.path.join(config["voz_dir"], voz)):
-        return f"Voz nao encontrada: {os.path.join(config['voz_dir'], voz)}"
-    if shutil.which("ffmpeg") is None:
-        return "ffmpeg nao encontrado no PATH"
-    return verificar_destino(config)
-
-
-def _resumo(caps):
-    numeros = sorted(int(c["capitulo"]) for c in caps)
-    return f"{numeros[0]}-{numeros[-1]}" if len(numeros) > 1 else str(numeros[0])
+def _listar_existentes(config, autor, novel_title):
+    partes_base = (_nome_seguro(autor), _nome_seguro(novel_title))
+    return listar_existentes(config, partes_base, PASTA_ESPERA)
 
 
 def _nome_seguro(texto):
@@ -349,4 +453,4 @@ def _nome_seguro(texto):
     return " ".join(texto.split()).rstrip(". ")
 
 
-__all__ = ["gerar_audiolivro", "listar_vozes", "separar_pendentes", "escanear_biblioteca"]
+__all__ = ["SessaoAudiolivro", "listar_vozes", "separar_pendentes", "escanear_biblioteca"]
