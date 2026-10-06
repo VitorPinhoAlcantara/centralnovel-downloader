@@ -25,17 +25,6 @@ from .tts.pool import PoolTTS
 from .tts.verificar import analisar
 
 
-def listar_vozes(config):
-    pasta = config["voz_dir"]
-    if not os.path.isdir(pasta):
-        return []
-    return sorted(
-        nome for nome in os.listdir(pasta)
-        if nome.lower().endswith(".wav")
-        and os.path.getsize(os.path.join(pasta, nome)) < 10 * 1024 * 1024
-    )
-
-
 def separar_pendentes(capitulos, novel_title, info, config):
     autor = info.get("autor") or config["autor_padrao"]
     existentes = _listar_existentes(config, autor, novel_title)
@@ -453,4 +442,4 @@ def _nome_seguro(texto):
     return " ".join(texto.split()).rstrip(". ")
 
 
-__all__ = ["SessaoAudiolivro", "listar_vozes", "separar_pendentes", "escanear_biblioteca"]
+__all__ = ["SessaoAudiolivro", "separar_pendentes", "escanear_biblioteca"]

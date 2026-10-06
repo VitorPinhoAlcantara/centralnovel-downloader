@@ -54,6 +54,8 @@ def _latents(modelo, args):
     assinatura = json.dumps(
         [[v, os.path.getsize(v), int(os.path.getmtime(v))] for v in args.voz]
         + [args.gpt_cond_len, args.gpt_cond_chunk_len, args.max_ref_length]
+        + [os.path.getsize(os.path.join(args.model_dir, "model.pth")),
+           int(os.path.getmtime(os.path.join(args.model_dir, "model.pth")))]
     )
     chave = hashlib.sha1(assinatura.encode("utf-8")).hexdigest()[:16]
     caminho = os.path.join(args.latents_cache, f"latents_{chave}.pt") if args.latents_cache else ""

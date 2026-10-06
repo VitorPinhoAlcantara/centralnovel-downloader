@@ -4,7 +4,7 @@ import os
 
 from InquirerPy import inquirer
 
-from .audiolivro import SessaoAudiolivro, listar_vozes, separar_pendentes
+from .audiolivro import SessaoAudiolivro, separar_pendentes
 from .audiolivro_config import carregar_config
 from .config import DPI, QUALIDADE_JPG
 from .converter import converter_pdf_para_cbz, processar_pasta
@@ -70,7 +70,6 @@ def menu_download():
 
 def _processar_novel(novel, capitulos, config):
     info = None
-    voz = None
     saidas_anteriores = None
     while True:
         selecionados = _selecionar_capitulos_ou_volumes(capitulos)
@@ -99,9 +98,7 @@ def _processar_novel(novel, capitulos, config):
                     return
                 continue
             audio_prontos = {chave_capitulo(cap) for cap in prontos}
-            voz = voz or _escolher_voz(config)
-            if not voz:
-                return
+            voz = config["voz_padrao"]
 
             def criar_sessao(voz=voz, info=info, config=config):
                 return SessaoAudiolivro(novel["title"], novel["url"], voz, config, info)
@@ -127,21 +124,6 @@ def _processar_novel(novel, capitulos, config):
             sessao_audio=criar_sessao() if criar_sessao else None,
         )
         _tratar_falhas(resultado["falhas"], novel["title"], saidas, sobrescrever, criar_sessao)
-
-
-def _escolher_voz(config):
-    vozes = listar_vozes(config)
-    if not vozes:
-        print(f"[ERRO] Nenhuma voz (.wav) em {config['voz_dir']}")
-        inquirer.confirm(message="Voltar", default=True).execute()
-        return None
-    padrao = config["voz_padrao"] if config["voz_padrao"] in vozes else vozes[0]
-    return inquirer.select(
-        message="Voz de referencia",
-        choices=[{"name": nome, "value": nome} for nome in vozes],
-        default=padrao,
-        cycle=True,
-    ).execute()
 
 
 def menu_conversao():

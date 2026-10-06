@@ -65,21 +65,22 @@ def test_ajustar_final_modos():
 
 
 def test_interjeicao_no_inicio_e_removida():
-    assert normalizar("Ha! Ele riu alto.") == "Ele riu alto."
-    assert normalizar("Argh! Ele rosnou.") == "Ele rosnou."
-    assert normalizar("Ha, ha, ha, ele riu.") == "ele riu."
+    assert normalizar("Ha! Ele riu alto.", {"interjeicoes": "remover"}) == "Ele riu alto."
+    assert normalizar("Argh! Ele rosnou.", {"interjeicoes": "remover"}) == "Ele rosnou."
+    assert normalizar("Ha, ha, ha, ele riu.", {"interjeicoes": "remover"}) == "ele riu."
 
 
 def test_interjeicao_sozinha_vira_vazio():
-    assert normalizar("Ha!") == ""
+    assert normalizar("Ha!", {"interjeicoes": "remover"}) == ""
 
 
 def test_interjeicao_no_meio_apos_dois_pontos():
-    assert normalizar("Ele disse: Ha! Não.") == "Ele disse: Não."
+    assert normalizar("Ele disse: Ha! Não.", {"interjeicoes": "remover"}) == "Ele disse: Não."
 
 
-def test_interjeicao_mantida_quando_desligada():
-    assert normalizar("Ha! Ele riu.", {"interjeicoes": "manter"}) == "Ha! Ele riu."
+def test_interjeicao_mantida_por_padrao():
+    assert normalizar("Ha! Ele riu.") == "Ha! Ele riu."
+    assert normalizar("Argh! Ele rosnou.") == "Argh! Ele rosnou."
 
 
 def test_palavras_normais_nao_sao_removidas():

@@ -14,7 +14,7 @@ OPCOES_PADRAO = {
     "numeros": "extenso",
     "ponto_interno": "normal",
     "abreviacoes": "expandir",
-    "interjeicoes": "remover",
+    "interjeicoes": "manter",
 }
 
 _PRONOMES = r"(?:se|me|te|lhe|lhes|lo|la|los|las|nos|vos|o|a|os|as|no|na|nas)"

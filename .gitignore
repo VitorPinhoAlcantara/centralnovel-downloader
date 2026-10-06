@@ -49,3 +49,6 @@ audiobook_work/
 # Resultados do laboratorio de TTS
 scripts/tts_lab/ab/
 scripts/tts_lab/ab2/
+
+# Modelo ajustado (grande)
+modelos/

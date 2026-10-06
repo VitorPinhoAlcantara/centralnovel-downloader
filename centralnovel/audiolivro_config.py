@@ -7,6 +7,7 @@ porque guarda o token do Audiobookshelf). O token tambem pode vir da variavel AB
 import json
 import os
 
+RAIZ_PROJETO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ARQUIVO_CONFIG = "audiobook_config.json"
 PASTA_TRABALHO = "audiobook_work"
 PASTA_ESPERA = f"{PASTA_TRABALHO}/espera_envio"  # audios prontos aguardando envio ao servidor
@@ -30,10 +31,7 @@ PADRAO = {
         "max_ref_length": 30,
     },
     "tts_python": r"C:\Users\vitor\Downloads\AuidoBook\ebook2audiobook\python_env\Scripts\python.exe",
-    "xtts_model_dir": (
-        r"C:\Users\vitor\Downloads\AuidoBook\ebook2audiobook\models\tts"
-        r"\models--coqui--XTTS-v2\snapshots\6c2b0d75eae4b7047358e3b6bd9325f857d43f77"
-    ),
+    "xtts_model_dir": os.path.join(RAIZ_PROJETO, "modelos", "xtts_narrador"),
     "idioma_xtts": "pt",
     "workers": 3,
     "workers_adaptativo": True,

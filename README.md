@@ -101,7 +101,7 @@ Com **Audiolivro** marcado, os capitulos sao processados um por vez (PDF, CBZ e 
 O motor e proprio (pacote `centralnovel/tts/`), sem ebook2audiobook. Fluxo por capitulo:
 
 1. o texto e lido direto do HTML do site (sem PDF), sem o link e a marca de traducao
-2. normalizacao PT-BR (abreviacoes, numeros por extenso, reticencias, interjeicoes removidas) e divisao em trechos de 60-180 caracteres
+2. normalizacao PT-BR (abreviacoes, numeros por extenso, reticencias; interjeicoes mantidas, pois o modelo ajustado as pronuncia) e divisao em trechos de 60-180 caracteres
 3. `workers` processos XTTS geram os trechos em paralelo na GPU (modelo carregado uma vez); o ponto final do trecho vira ` ;` para o XTTS nao falar "ponto"
 4. QA numerico (duracao, silencio, energia) e verificacao por transcricao com Whisper: trechos com palavras puladas ou "ponto" falado sao regenerados com outra seed
 5. os trechos sao montados com pausas, normalizados (loudnorm) e gravados em m4b com as tags corretas
@@ -132,7 +132,7 @@ e aponte `tts_python` para `tts_env\Scripts\python.exe` no `audiobook_config.jso
 Na primeira execucao e criado `audiobook_config.json` (fora do git). Ajuste:
 
 - `tts_python`, `xtts_model_dir`, `workers` (maximo; 3 e ~2,5x mais rapido que 1 e usa ~12 GB de VRAM), `workers_adaptativo` (liga o ajuste ao vivo: antes de cada capitulo mede o uso da GPU sem os workers e usa 3 com uso baixo, 2 com moderado e 1 com alto, limitado pela VRAM livre; durante o capitulo pausa workers se a VRAM livre ficar critica), `gpu_util_baixo`, `gpu_util_moderado`, `vram_por_worker_mb`, `vram_reserva_mb`, `vram_critica_mb`, `vram_folga_mb`, `matmul`
-- `voz_dir`, `voz_padrao`: pasta dos `.wav` de referencia e a voz padrao
+- `voz_dir`, `voz_padrao`: pasta dos `.wav` de referencia; o fluxo sempre usa `voz_padrao` com o modelo ajustado (nao ha mais escolha de voz no menu)
 - `xtts`: temperatura, repetition penalty, top-k, top-p e speed; `xtts_ref`: tamanho da referencia de voz (`gpt_cond_len` 30 s soa mais expressivo que o padrao de 6 s)
 - `qa`, `qa_tentativas`, `asr`, `asr_modelo`, `asr_rodadas`, `final_trecho`, `normalizacao`, `pausas_ms`, `bitrate`
 - `abs_ssh`, `abs_remote_dir`: servidor do Audiobookshelf acessado por SSH (ex.: `topiinho@server`) e a pasta de livros nele; deixe `abs_ssh` vazio para gravar numa pasta local (`abs_dir`)
