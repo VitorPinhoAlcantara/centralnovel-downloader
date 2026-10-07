@@ -143,6 +143,10 @@ def main():
     args = _argumentos()
     import torch
 
+    from centralnovel.tts import compat
+
+    compat.aplicar()
+
     try:
         torch.set_float32_matmul_precision(args.matmul)
     except Exception:

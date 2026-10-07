@@ -7,8 +7,11 @@ tokenizers==0.22.2
 huggingface-hub==1.33.0
 safetensors==0.8.0
 coqui-tts==0.27.5
+coqui-tts-trainer==0.3.3
 numpy==2.5.3
 scipy==1.18.1
 soundfile==0.14.0
 librosa==1.0.0
 num2words==0.5.14
+pandas==3.0.6
+tensorboard==2.21.0

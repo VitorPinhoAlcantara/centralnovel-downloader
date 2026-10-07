@@ -52,3 +52,7 @@ scripts/tts_lab/ab2/
 
 # Modelo ajustado (grande)
 modelos/
+
+# Ambiente e dados locais do TTS
+tts_env/
+vozes/

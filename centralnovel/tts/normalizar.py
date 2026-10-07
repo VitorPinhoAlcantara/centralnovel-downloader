@@ -26,6 +26,8 @@ _RE_TRAVESSAO_MEIO = re.compile(r"(?<=[.!?…])\s+[—–]\s+|\s+[—–]\s+")
 _RE_RETICENCIAS = re.compile(r"\.{3,}|…")
 _RE_COLCHETES = re.compile(r"\[([^\[\]]+)\]")
 _RE_NUMERO = re.compile(r"(?<![\w.,])(\d{1,9})(?![\w.,]*\d)")
+_RE_MILHAR = re.compile(r"(?<![\w.,])(\d{1,3}(?:\.\d{3})+)(?![\w.,]*\d)")
+_RE_BARRA_NUMEROS = re.compile(r"(?<![\w/])(\d[\d.,]*)\s*/\s*(\d[\d.,]*)(?![\w/])")
 _INTERJ = (
     r"(?:ha(?:ha)*h?|h[ae]h[ae]*|hee+|rá(?:[- ]?rá)*|a{1,3}rg+h*|ugh+|gr{2,}h*|h?m{2,}|hm+|hum+|uh+m*"
     r"|tsc|pf+t*|k{3,})"
@@ -53,6 +55,8 @@ def normalizar(texto, opcoes=None):
     texto = _aplicar_colchetes(texto, cfg["colchetes"])
     texto = _aplicar_reticencias(texto, cfg["reticencias"])
     texto = _aplicar_hifens(texto, cfg["hifen_pronome"], cfg["hifen_composta"])
+    texto = _RE_MILHAR.sub(lambda m: m.group(1).replace(".", ""), texto)
+    texto = _RE_BARRA_NUMEROS.sub(r"\1 de \2", texto)
     texto = _aplicar_numeros(texto, cfg["numeros"])
     texto = re.sub(r"\s+([,.;:!?])", r"\1", texto)
     texto = " ".join(texto.split())

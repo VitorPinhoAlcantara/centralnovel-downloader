@@ -26,3 +26,26 @@ def test_numero_em_digitos_equivale_ao_extenso():
 
 def test_frase_curta_tolera_uma_palavra():
     assert analisar("Você não pode. Acabou, Neph.", "Você não pode. Acabou, Nefi.")["ok"]
+
+
+def test_linha_de_sistema_com_colchetes_e_tolerante():
+    ref = "Inimigos Derrotados: [mil, duzentos e treze/seis mil]."
+    assert analisar(ref, "Inimigos derrotados, 1.213 sobre 6.000")["ok"]
+
+
+def test_linha_de_sistema_ainda_acusa_ponto_falado():
+    ref = "Memória: [M. Su, ndo]."
+    r = analisar(ref, "Memória M Su ndo ponto")
+    assert "ponto_falado" in r["motivos"]
+
+
+def test_frase_comum_continua_exigindo_cobertura():
+    r = analisar("Agora ele finalmente era capaz de igualar Nephis e vencer a luta.", "Agora ele finalmente")
+    assert not r["ok"]
+
+
+def test_palavra_parecida_aceita_final_esperado():
+    from centralnovel.tts.verificar import tem_palavra_parecida
+    assert tem_palavra_parecida("Pedra.", "pedra")
+    assert tem_palavra_parecida("Oh!", "pedra") is False
+    assert tem_palavra_parecida("", "pedra") is False

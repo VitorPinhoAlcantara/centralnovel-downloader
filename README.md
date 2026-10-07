@@ -118,20 +118,20 @@ Capitulos que ja existem no servidor sao ignorados, e um capitulo interrompido r
 
 ### Ambiente do TTS
 
-O worker roda no Python que tem torch/coqui-tts (`tts_python`). Hoje e o do ebook2audiobook. Para um ambiente proprio, use `requirements-tts.txt` (torch cu130, para GPUs Blackwell):
+O worker roda no Python do ambiente `tts_env/` (torch cu130, para GPUs Blackwell). Para criar:
 
 ```powershell
 python -m venv tts_env
 .\tts_env\Scripts\python.exe -m pip install -r requirements-tts.txt
 ```
 
-e aponte `tts_python` para `tts_env\Scripts\python.exe` no `audiobook_config.json`. O modelo XTTS-v2 e baixado do Hugging Face; `xtts_model_dir` aponta a pasta com `config.json`, `model.pth` e `vocab.json`. O Whisper (`asr_modelo`) tambem e baixado na primeira verificacao.
+Arquivos locais (ignorados pelo git): `modelos/xtts_narrador` (modelo ajustado, usado por padrao), `modelos/xtts_base` (XTTS-v2 original, base do retreino) e `vozes/` (referencias `.wav`). O Whisper (`asr_modelo`) e baixado do Hugging Face na primeira verificacao.
 
 ### Configuracao
 
 Na primeira execucao e criado `audiobook_config.json` (fora do git). Ajuste:
 
-- `tts_python`, `xtts_model_dir`, `workers` (maximo; 3 e ~2,5x mais rapido que 1 e usa ~12 GB de VRAM), `workers_adaptativo` (liga o ajuste ao vivo: antes de cada capitulo mede o uso da GPU sem os workers e usa 3 com uso baixo, 2 com moderado e 1 com alto, limitado pela VRAM livre; durante o capitulo pausa workers se a VRAM livre ficar critica), `gpu_util_baixo`, `gpu_util_moderado`, `vram_por_worker_mb`, `vram_reserva_mb`, `vram_critica_mb`, `vram_folga_mb`, `matmul`
+- `tts_python` (padrao `tts_env`), `xtts_model_dir` (padrao `modelos/xtts_narrador`), `workers` (maximo; 3 e ~2,5x mais rapido que 1 e usa ~12 GB de VRAM), `workers_adaptativo` (liga o ajuste ao vivo: antes de cada capitulo mede o uso da GPU sem os workers e usa 3 com uso baixo, 2 com moderado e 1 com alto, limitado pela VRAM livre; durante o capitulo pausa workers se a VRAM livre ficar critica), `gpu_util_baixo`, `gpu_util_moderado`, `vram_por_worker_mb`, `vram_reserva_mb`, `vram_critica_mb`, `vram_folga_mb`, `matmul`
 - `voz_dir`, `voz_padrao`: pasta dos `.wav` de referencia; o fluxo sempre usa `voz_padrao` com o modelo ajustado (nao ha mais escolha de voz no menu)
 - `xtts`: temperatura, repetition penalty, top-k, top-p e speed; `xtts_ref`: tamanho da referencia de voz (`gpt_cond_len` 30 s soa mais expressivo que o padrao de 6 s)
 - `qa`, `qa_tentativas`, `asr`, `asr_modelo`, `asr_rodadas`, `final_trecho`, `normalizacao`, `pausas_ms`, `bitrate`

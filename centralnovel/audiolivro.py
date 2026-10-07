@@ -6,6 +6,7 @@ import threading
 import zlib
 
 import requests
+import soundfile as sf
 
 from .audiolivro_config import PASTA_ESPERA, PASTA_TRABALHO, carregar_config
 from .epub_writer import criar_epub_volume
@@ -19,10 +20,16 @@ from .servidor_abs import (
 from .texto_capitulo import baixar_capa, obter_info_novel, obter_texto_capitulo
 from .tts.dividir import dividir_paragrafos
 from .tts.gpu import escolher_workers
-from .tts.montar import codificar_m4b, montar_capitulo
+from .tts.montar import (
+    cortar_em,
+    detectar_rajada_final,
+    codificar_m4b,
+    montar_capitulo,
+    recortar,
+)
 from .tts.normalizar import ajustar_final, normalizar
 from .tts.pool import PoolTTS
-from .tts.verificar import analisar
+from .tts.verificar import analisar, palavras, tem_palavra_parecida
 
 
 def separar_pendentes(capitulos, novel_title, info, config):
@@ -146,7 +153,7 @@ class SessaoAudiolivro:
         if ausentes:
             return False, f"{len(ausentes)} trecho(s) sem audio (ex.: {', '.join(ausentes[:5])})"
 
-        self._gravar_relatorio_qa(volume, numero, trechos, resultados)
+        caminho_qa = self._gravar_relatorio_qa(volume, numero, trechos, resultados)
         wav = os.path.join(pasta, "capitulo.wav")
         destino = caminho_destino(self.config, self.autor, self.novel_title, cap)
         try:
@@ -156,9 +163,12 @@ class SessaoAudiolivro:
         except (OSError, RuntimeError) as exc:
             return False, f"falha ao montar o audio: {exc}"
 
-        reprovados = [i for i, r in resultados.items() if not r.get("ok") or r.get("asr_motivos")]
+        com_whisper = sum(1 for r in resultados.values() if r.get("asr_motivos"))
+        so_numerico = sum(1 for r in resultados.values() if not r.get("ok") and not r.get("asr_motivos"))
         print(f"Audio pronto: {duracao / 60:.1f} min, {len(trechos)} trechos, "
-              f"{len(reprovados)} com alerta de QA")
+              f"{com_whisper} alerta(s) do Whisper, {so_numerico} so do QA numerico")
+        if com_whisper or so_numerico:
+            print(f"  relatorio: {caminho_qa}")
         shutil.rmtree(pasta, ignore_errors=True)
         self.publicados.append(cap)
         self.existentes.add(caminho_relativo(self.config, self.autor, self.novel_title, cap))
@@ -308,6 +318,8 @@ class SessaoAudiolivro:
         pendentes = list(ids)
         rodadas = int(self.config["asr_rodadas"])
         por_id = {}
+        cortadas = 0
+        aparar = self.config.get("aparar_rajada_final", True)
         print(f"Verificando {len(pendentes)} trecho(s) com o Whisper...")
         for rodada in range(rodadas + 1):
             transcricoes = self.pool.transcrever(
@@ -323,6 +335,8 @@ class SessaoAudiolivro:
                 if not analise["ok"]:
                     ruins.append(i)
             gravar_estado()
+            if aparar:
+                cortadas += self._aparar_rajadas(pendentes, textos, pasta)
             if not ruins or rodada == rodadas:
                 break
             print(f"  rodada {rodada + 1}: regenerando {len(ruins)} trecho(s) com problema")
@@ -337,9 +351,39 @@ class SessaoAudiolivro:
                 estado[i]["res"] = res
                 estado[i]["verificado"] = False
             pendentes = ruins
+        if cortadas:
+            print(f"  {cortadas} rajada(s) apos o fim da frase removida(s)")
         restantes = [i for i, a in por_id.items() if not a["ok"]]
         if restantes:
             print(f"  {len(restantes)} trecho(s) ainda com alerta apos {rodadas} rodada(s) (veja o relatorio de QA)")
+
+    def _aparar_rajadas(self, ids, textos, pasta):
+        candidatas = {}
+        for i in ids:
+            caminho = os.path.join(pasta, f"{i}.wav")
+            wav, taxa = sf.read(caminho, dtype="float32")
+            rajada = detectar_rajada_final(wav, taxa)
+            if rajada:
+                candidatas[i] = (caminho, wav, taxa, rajada)
+        if not candidatas:
+            return 0
+        clipes = []
+        for i, (caminho, wav, taxa, rajada) in candidatas.items():
+            clipe = os.path.join(pasta, f"{i}_cauda.wav")
+            sf.write(clipe, recortar(wav, rajada["ini"], rajada["fim"], taxa), taxa, subtype="PCM_16")
+            clipes.append((i, clipe))
+        transcricoes = self.pool.transcrever(clipes)
+        cortadas = 0
+        for i, (caminho, wav, taxa, rajada) in candidatas.items():
+            esperada = palavras(textos[i])
+            ultima = esperada[-1] if esperada else ""
+            if ultima and tem_palavra_parecida(transcricoes[i], ultima):
+                continue
+            sf.write(caminho, cortar_em(wav, rajada["corte"], taxa), taxa, subtype="PCM_16")
+            cortadas += 1
+        for _, clipe in clipes:
+            os.remove(clipe)
+        return cortadas
 
     def _gravar_relatorio_qa(self, volume, numero, trechos, resultados):
         pasta = os.path.join(PASTA_TRABALHO, "qa", _nome_seguro(self.novel_title))
@@ -351,8 +395,10 @@ class SessaoAudiolivro:
              "tentativas": r.get("tentativas"), "metricas": r.get("metricas")}
             for i, r in sorted(resultados.items()) if not r.get("ok") or r.get("asr_motivos")
         ]
-        with open(os.path.join(pasta, f"vol{volume}_cap{numero:04d}.json"), "w", encoding="utf-8") as arquivo:
+        caminho = os.path.join(pasta, f"vol{volume}_cap{numero:04d}.json")
+        with open(caminho, "w", encoding="utf-8") as arquivo:
             json.dump({"trechos": len(trechos), "alertas": alertas}, arquivo, ensure_ascii=False, indent=1)
+        return caminho
 
     def _metadados(self, cap, titulo_cap, volume, numero):
         album = self.config["titulo_volume"].format(novel=self.novel_title, volume=volume)

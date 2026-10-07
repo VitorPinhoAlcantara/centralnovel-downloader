@@ -11,6 +11,7 @@ LIMITES_ASR_PADRAO = {
     "cobertura_min": 0.85,
     "sobra_ponto": ("ponto", "pontos", "pont"),
     "fim_ausente_max": 2,
+    "cobertura_min_sistema": 0.4,
 }
 
 
@@ -63,11 +64,20 @@ def analisar(referencia, hipotese, limites=None):
     sobra = hip[fim_hip:]
 
     motivos = []
-    minimo = min(lim["cobertura_min"], (len(ref) - 1) / len(ref))
+    linha_sistema = "[" in str(referencia)
+    minimo_base = lim["cobertura_min_sistema"] if linha_sistema else lim["cobertura_min"]
+    minimo = min(minimo_base, (len(ref) - 1) / len(ref))
     if cobertura < minimo:
         motivos.append("pulou_palavras")
-    if len(ref) - fim_ref > lim["fim_ausente_max"]:
+    if not linha_sistema and len(ref) - fim_ref > lim["fim_ausente_max"]:
         motivos.append("fim_ausente")
     if any(p in lim["sobra_ponto"] for p in sobra):
         motivos.append("ponto_falado")
     return {"ok": not motivos, "motivos": motivos, "cobertura": round(cobertura, 3)}
+
+
+def tem_palavra_parecida(texto, alvo, similaridade=0.7):
+    for palavra in palavras(texto):
+        if difflib.SequenceMatcher(a=palavra, b=alvo).ratio() >= similaridade:
+            return True
+    return False

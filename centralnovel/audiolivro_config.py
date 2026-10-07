@@ -13,7 +13,7 @@ PASTA_TRABALHO = "audiobook_work"
 PASTA_ESPERA = f"{PASTA_TRABALHO}/espera_envio"  # audios prontos aguardando envio ao servidor
 
 PADRAO = {
-    "voz_dir": r"C:\Users\vitor\Downloads\AuidoBook\vozes",
+    "voz_dir": os.path.join(RAIZ_PROJETO, "vozes"),
     "voz_padrao": "voz_shadow_slave_ref.wav",
     "idioma": "por",
     "dispositivo": "cuda",
@@ -30,7 +30,7 @@ PADRAO = {
         "gpt_cond_chunk_len": 6,
         "max_ref_length": 30,
     },
-    "tts_python": r"C:\Users\vitor\Downloads\AuidoBook\ebook2audiobook\python_env\Scripts\python.exe",
+    "tts_python": os.path.join(RAIZ_PROJETO, "tts_env", "Scripts", "python.exe"),
     "xtts_model_dir": os.path.join(RAIZ_PROJETO, "modelos", "xtts_narrador"),
     "idioma_xtts": "pt",
     "workers": 3,
@@ -48,6 +48,7 @@ PADRAO = {
     "asr": True,
     "asr_modelo": "openai/whisper-small",
     "asr_rodadas": 2,
+    "aparar_rajada_final": True,
     "asr_variacao_params": {"2": {"temperature": 0.7, "top_p": 0.85}},
     "normalizacao": {},
     "bitrate": "96k",

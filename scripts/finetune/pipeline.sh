@@ -3,8 +3,8 @@ set -u
 cd "$(dirname "$0")/../.."
 
 W=audiobook_work/finetune
-E2A_PY="C:/Users/vitor/Downloads/AuidoBook/ebook2audiobook/python_env/Scripts/python.exe"
-BASE="C:/Users/vitor/Downloads/AuidoBook/ebook2audiobook/models/tts/models--coqui--XTTS-v2/snapshots/6c2b0d75eae4b7047358e3b6bd9325f857d43f77"
+E2A_PY="$PWD/tts_env/Scripts/python.exe"
+BASE="$PWD/modelos/xtts_base"
 WHISPER=$(ls -d ~/.cache/huggingface/hub/models--openai--whisper-large-v3/snapshots/*/ | head -1)
 RUN1=$(ls -d $W/treino/*/ | head -1)
 export PYTHONUTF8=1

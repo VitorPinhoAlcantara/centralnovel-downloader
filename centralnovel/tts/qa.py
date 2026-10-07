@@ -7,6 +7,8 @@ LIMITES_PADRAO = {
     "duracao_max_s": 27.0,
     "energia_min_db": -45.0,
     "clipping_max": 0.002,
+    "chars_curtas_max": 40,
+    "curta_base_s": 1.5,
 }
 
 _JANELA_S = 0.02
@@ -51,7 +53,7 @@ def avaliar(metricas, limites=None):
         motivos.append("mudo")
     if metricas["duracao_s"] > lim["duracao_max_s"]:
         motivos.append("nao_parou")
-    if metricas["chars_s"] < lim["chars_s_min"]:
+    if _esticado(metricas, lim):
         motivos.append("esticado")
     if metricas["chars_s"] > lim["chars_s_max"]:
         motivos.append("cortado")
@@ -60,6 +62,12 @@ def avaliar(metricas, limites=None):
     if metricas["clipping"] > lim["clipping_max"]:
         motivos.append("clipping")
     return not motivos, motivos
+
+
+def _esticado(metricas, lim):
+    if metricas["chars"] < lim["chars_curtas_max"]:
+        return metricas["duracao_s"] > lim["curta_base_s"] + metricas["chars"] / max(lim["chars_s_min"], 1e-6)
+    return metricas["chars_s"] < lim["chars_s_min"]
 
 
 def pontuacao(metricas, limites=None):

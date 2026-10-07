@@ -85,3 +85,22 @@ def test_interjeicao_mantida_por_padrao():
 
 def test_palavras_normais_nao_sao_removidas():
     assert normalizar("Há muito tempo, o argumento era claro.") == "Há muito tempo, o argumento era claro."
+
+
+def test_barra_entre_numeros_vira_de():
+    assert normalizar("Progresso: 0/1000") == "Progresso: zero de mil"
+    assert normalizar("Inimigos Derrotados: [12/50]") == "Inimigos Derrotados: [doze de cinquenta]"
+    assert normalizar("Foram 3 / 10 tentativas.") == "Foram três de dez tentativas."
+
+
+def test_barra_com_separador_de_milhar():
+    assert normalizar("1.213/6.000") == "mil, duzentos e treze de seis mil"
+
+
+def test_barra_fora_de_numeros_nao_muda():
+    assert normalizar("sim/não e ele/ela") == "sim/não e ele/ela"
+    assert normalizar("Rank 5/A") == "Rank cinco/A"
+
+
+def test_milhar_sozinho():
+    assert normalizar("Eram 10.000 soldados.") == "Eram dez mil soldados."
